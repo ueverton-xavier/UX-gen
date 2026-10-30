@@ -1,8 +1,9 @@
 {
-  "name": "Estúdio IA",
-  "short_name": "Estúdio IA",
+  "name": "UXIA",
+  "short_name": "UXIA",
   "description": "Gere imagens e vídeos com FLUX, CogVideoX, AnimateDiff e LTX-Video. Nada é salvo no aparelho.",
   "lang": "pt-BR",
+  "id": "./",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

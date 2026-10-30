@@ -1,4 +1,4 @@
-# Estúdio IA
+# UXIA
 
 App de conversa para gerar **imagens e vídeos** com modelos abertos hospedados em
 Hugging Face Spaces: FLUX.1 [dev], [schnell] e Kontext, CogVideoX, AnimateDiff Lightning e LTX-Video.
