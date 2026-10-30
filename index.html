@@ -130,7 +130,7 @@
 </dialog>
 
 <script type="module">
-const VERSAO = "v9";
+const VERSAO = "v10";
 import { Client, handle_file } from "https://cdn.jsdelivr.net/npm/@gradio/client@2.7.1/dist/browser.js";
 
 // Catálogo de modelos (Spaces públicos do Hugging Face). "aceita": o que o modelo recebe.
@@ -251,7 +251,12 @@ function pickEndpoint(api, hasImage) {
     const ps = ep.parameters || [];
     if (!findPrompt(ps)) continue;
     const img = ps.find(isImageParam);
+    const outs = (ep.returns || []).map((r) => String(r.component || "").toLowerCase());
     let score = 0;
+    // Prioriza funções que devolvem mídia; descarta utilitárias que só devolvem texto (ex.: "melhorar prompt").
+    if (outs.some((c) => /video|image|gallery|file|model3d/.test(c))) score += 6;
+    else if (outs.length && outs.every((c) => /textbox|markdown|html|json|label|number|state/.test(c))) score -= 8;
+    if (/enhance|prompt|caption|translat|describe|interrogat|upscal|clear|reset|example|random/i.test(name)) score -= 5;
     if (hasImage && img) score += 3;
     if (!hasImage && img && !img.parameter_has_default) score -= 5;
     if (/^\/(infer|generate|run|predict|generate_video|generate_image|text_to_video|image_to_video)/.test(name)) score += 2;
@@ -286,12 +291,17 @@ function buildArgs(params, prompt, imageBlob) {
 }
 
 // Acha o primeiro arquivo (imagem ou vídeo) na resposta, em qualquer formato.
+// Junta todos os arquivos da resposta e prefere vídeo (alguns Spaces devolvem vídeo + GIF + prévia).
+function findFiles(x, acc = []) {
+  if (!x || typeof x !== "object") return acc;
+  if (typeof x.url === "string") { acc.push(x); return acc; }
+  for (const v of Array.isArray(x) ? x : Object.values(x)) findFiles(v, acc);
+  return acc;
+}
+const VIDEO_RE = /\.(mp4|webm|mov|mkv|avi)(\?|$)/i;
 function findFile(x) {
-  if (!x || typeof x !== "object") return null;
-  if (typeof x.url === "string") return x;
-  if (x.video) return findFile(x.video);
-  for (const v of Array.isArray(x) ? x : Object.values(x)) { const f = findFile(v); if (f) return f; }
-  return null;
+  const files = findFiles(x);
+  return files.find((f) => VIDEO_RE.test(f.url) || VIDEO_RE.test(f.orig_name || f.path || "") || /video/.test(f.mime_type || "")) || files[0] || null;
 }
 const findSeed = (data) => data.find((d) => typeof d === "number");
 
@@ -313,10 +323,12 @@ async function generate(m, prompt, inputBlob) {
   const file = findFile(res.data);
   if (!file) throw new Error("o Space respondeu sem imagem nem vídeo");
   const seed = findSeed(res.data);
-  const videoUrl = /\.(mp4|webm|mov)(\?|$)/i.test(file.url) || /video/.test(file.mime_type || "");
+  const videoUrl = /\.(mp4|webm|mov|mkv|avi)(\?|$)/i.test(file.url) || /\.(mp4|webm|mov|mkv|avi)$/i.test(file.orig_name || file.path || "") || /video/.test(file.mime_type || "");
   try {
     const blob = await (await fetch(file.url, { cache: "no-store" })).blob();
-    const typed = blob.type ? blob : new Blob([blob], { type: videoUrl ? "video/mp4" : "image/png" });
+    // O servidor às vezes manda tipo genérico (octet-stream): decide pelo nome do arquivo.
+    const generic = !/^(image|video)\//.test(blob.type);
+    const typed = generic || (videoUrl && !blob.type.startsWith("video/")) ? new Blob([blob], { type: videoUrl ? "video/mp4" : (blob.type.startsWith("image/") ? blob.type : "image/png") }) : blob;
     return { blob: typed, seed };
   } catch {
     // Sem permissão para baixar pelo app: mostra direto do servidor do Space.
