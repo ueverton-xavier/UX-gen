@@ -133,7 +133,7 @@
 </dialog>
 
 <script type="module">
-const VERSAO = "v11";
+const VERSAO = "v12";
 import { Client, handle_file } from "https://cdn.jsdelivr.net/npm/@gradio/client@2.7.1/dist/browser.js";
 
 // Catálogo de modelos (Spaces públicos do Hugging Face). "aceita": o que o modelo recebe.
@@ -151,6 +151,8 @@ let model = MODELS[0];
 // 1) nada sexual envolvendo menores; 2) nada de nudez/sexo a partir de foto anexada (pessoa real, sem consentimento verificável).
 const W = (s) => new RegExp(`(?<![\\p{L}\\d])(${s})(?![\\p{L}\\d])`, "iu");
 const MINOR = W("crian[cç]as?|menin[oa]s?|menor(es)? de idade|infantil|beb[eê]s?|adolescentes?|novinh[oa]s?|colegial|child(ren)?|kids?|minors?|underage|teens?|teenagers?|toddlers?|loli|shota|preteen|schoolgirl|schoolboy|(?:[1-9]|1[0-7])\\s*(anos|years?\\s*old|yo)");
+// Despir: verbo de tirar/remover + peça de roupa, em PT e EN (ex.: "retirando o sutiã", "taking off her bra").
+const UNDRESS = /(?<![\p{L}])(re)?(tir|remov|desabot|abaix|arranc|desamarr|solt|deix)\p{L}*\s+(\p{L}+\s+){0,3}(sutiã|sutia|roupas?|calcinhas?|biqu[ií]nis?|bikinis?|lingeries?|top|blusas?|camisas?|saias?|shorts?|vestidos?|cal[cç]as?|maiôs?|pe[cç]as?)(?![\p{L}])|(?<![\p{L}])(tak\p{L}* off|remov\p{L}*|strip\p{L}*|pull\p{L}* (down|off)|unhook\p{L}*|unbutton\p{L}*|slip\p{L}* off)\s+(\p{L}+\s+){0,3}(bra|top|shirt|clothes|clothing|panties|bikini|lingerie|dress|skirt|pants|underwear|swimsuit)s?(?![\p{L}])|(?<![\p{L}])(strip\p{L}*|strip-?tease|desnud\p{L}*|se despe|se despindo|fica\p{L}* (nu|nua|pelad[oa]))(?![\p{L}])/iu;
 const SEXUAL = W("nu[ae]?s?|nudez|pelad[oa]s?|despi\\w*|tir[ae]\\w* a roupa|sem roupa|sexo|sexual|er[oó]tic[oa]|porn\\w*|nsfw|nude|naked|undress\\w*|sex\\w*|erotic|topless|lingerie|bikini|biqu[ií]ni|transparen\\w*|see[- ]?through|sheer|explicit");
 
 const $ = (id) => document.getElementById(id);
@@ -308,6 +310,11 @@ function buildArgs(params, prompt, imageBlob) {
       if (real) args[n] = real;
     }
   }
+  // Entradas de mídia opcionais na prática (ex.: video_input do CogVideoX) vão vazias.
+  for (const p of params) {
+    const n = p.parameter_name;
+    if (n && !(n in args) && !p.parameter_has_default && /video|image|file|audio|gallery/i.test(p.component || "")) args[n] = null;
+  }
   const missing = params.filter((p) => !(p.parameter_name in args) && !p.parameter_has_default).map((p) => p.parameter_name);
   if (missing.length) throw new Error(`este Space pede campos que o app não sabe preencher: ${missing.join(", ")}`);
   return args;
@@ -361,8 +368,9 @@ async function generate(m, prompt, inputBlob) {
 
 // ---------- Fluxo da conversa ----------
 function blocked(prompt, hasImage) {
-  if (MINOR.test(prompt) && SEXUAL.test(prompt)) return "Não posso gerar conteúdo sexual envolvendo menores.";
-  if (hasImage && SEXUAL.test(prompt)) return "Não gero nudez ou conteúdo sexual a partir de foto anexada — pode ser uma pessoa real sem consentimento. Para isso, descreva uma cena fictícia só com texto.";
+  const sexual = SEXUAL.test(prompt) || UNDRESS.test(prompt);
+  if (MINOR.test(prompt) && sexual) return "Não posso gerar conteúdo sexual envolvendo menores.";
+  if (hasImage && sexual) return "Com imagem anexada não gero nudez, despir ou conteúdo sexual — o app não consegue saber se é uma pessoa real (vale também para imagens geradas aqui). Para cenas adultas fictícias, descreva só com texto, sem anexo.";
   return null;
 }
 
