@@ -118,12 +118,16 @@
   </div>
   <label for="token">Token do Hugging Face (opcional, aumenta a cota; fica só na memória)</label>
   <input id="token" type="password" autocomplete="off" placeholder="hf_...">
+  <label style="display:flex;align-items:center;gap:8px;margin-top:10px;color:var(--txt)">
+    <input id="remember" type="checkbox" style="width:auto"> Lembrar token neste aparelho
+  </label>
+  <small style="color:var(--mut);display:block;margin-top:4px">Única coisa que o app grava. Desmarque e toque em Pronto para apagar.</small>
   <button class="ok" id="okset">Pronto</button>
   <button class="ok" id="diag" style="background:transparent;color:var(--acc);border:1px solid var(--acc)">🔍 Testar conexão do modelo atual</button>
 </dialog>
 
 <script type="module">
-const VERSAO = "v7";
+const VERSAO = "v8";
 import { Client, handle_file } from "https://cdn.jsdelivr.net/npm/@gradio/client@2.7.1/dist/browser.js";
 
 // Catálogo de modelos (Spaces públicos do Hugging Face). "aceita": o que o modelo recebe.
@@ -390,7 +394,20 @@ $("clip").onclick = () => $("file").click();
 $("file").onchange = () => { const f = $("file").files[0]; $("file").value = ""; if (f) setAttach(f); };
 $("unattach").onclick = () => setAttach(null);
 $("gear").onclick = () => $("settings").showModal();
-$("okset").onclick = () => $("settings").close();
+// Token salvo só se o usuário marcar "Lembrar" (única gravação do app no aparelho).
+const TOKEN_KEY = "uxia_hf_token";
+function saveTokenPref() {
+  const token = $("token").value.trim();
+  try {
+    if ($("remember").checked && token) localStorage.setItem(TOKEN_KEY, token);
+    else localStorage.removeItem(TOKEN_KEY);
+  } catch {}
+}
+try {
+  const saved = localStorage.getItem(TOKEN_KEY);
+  if (saved) { $("token").value = saved; $("remember").checked = true; }
+} catch {}
+$("okset").onclick = () => { saveTokenPref(); $("settings").close(); };
 
 // Diagnóstico: testa cada etapa da conexão com o Space e mostra o resultado no chat.
 async function probe(url, opts = {}) {
@@ -437,7 +454,7 @@ $("clear").onclick = () => {
 };
 
 function hello() {
-  sys(`UXIA ${VERSAO} · conversa só na memória: ao fechar, tudo some. Use “Salvar” para baixar.`);
+  sys(`UXIA ${VERSAO} · conversa só na memória: ao fechar, tudo some. Use “Salvar” para baixar.${$("remember").checked ? " Token salvo neste aparelho." : ""}`);
   bubble("bot", { text: "Oi! Toque no nome do modelo lá em cima para escolher (imagem ou vídeo). Escreva o que quer criar — ou anexe uma imagem pelo clipe e diga o que fazer com ela." });
 }
 setModel(model, false);
