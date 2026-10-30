@@ -116,6 +116,9 @@
     <div><label for="steps">Passos (vazio = padrão)</label><input id="steps" type="number" min="1" max="50" placeholder="auto"></div>
     <div><label for="seed">Seed (vazio = aleatória)</label><input id="seed" type="number" min="0" placeholder="aleatória"></div>
   </div>
+  <label style="display:flex;align-items:center;gap:8px;margin-top:10px;color:var(--txt)">
+    <input id="realista" type="checkbox" checked style="width:auto"> Estilo realista (quando o modelo tiver opção de estilo)
+  </label>
   <label for="token">Token do Hugging Face (opcional, aumenta a cota; fica só na memória)</label>
   <input id="token" type="password" autocomplete="off" placeholder="hf_...">
   <label style="display:flex;align-items:center;gap:8px;margin-top:10px;color:var(--txt)">
@@ -130,7 +133,7 @@
 </dialog>
 
 <script type="module">
-const VERSAO = "v10";
+const VERSAO = "v11";
 import { Client, handle_file } from "https://cdn.jsdelivr.net/npm/@gradio/client@2.7.1/dist/browser.js";
 
 // Catálogo de modelos (Spaces públicos do Hugging Face). "aceita": o que o modelo recebe.
@@ -269,6 +272,16 @@ function pickEndpoint(api, hasImage) {
   return best;
 }
 
+// Lê as opções de um campo de lista (Dropdown/Radio) a partir da API do Space.
+function choicesOf(p) {
+  const out = [];
+  const t = p.python_type?.type || "";
+  for (const m of t.matchAll(/'([^']*)'|"([^"]*)"/g)) out.push(m[1] ?? m[2]);
+  const en = p.type?.enum || p.python_type?.enum;
+  if (Array.isArray(en)) out.push(...en.map(String));
+  return out;
+}
+
 function buildArgs(params, prompt, imageBlob) {
   const args = {};
   const pp = findPrompt(params); args[pp.parameter_name] = prompt;
@@ -284,6 +297,16 @@ function buildArgs(params, prompt, imageBlob) {
     else if (/^(num_inference_steps|steps|num_steps|step)$/i.test(n) && stepsTxt && /number|slider/i.test(p.component || "")) args[n] = Number(stepsTxt);
     else if (/^width$/i.test(n) && model.tipo === "imagem") args[n] = w;
     else if (/^height$/i.test(n) && model.tipo === "imagem") args[n] = h;
+  }
+  // Campos de escolha de estilo/modelo base (ex.: AnimateDiff "base"): prefere a opção realista.
+  if ($("realista").checked) {
+    for (const p of params) {
+      const n = p.parameter_name || "";
+      if (n in args || !/base|style|estilo|model|checkpoint/i.test(n)) continue;
+      const opts = choicesOf(p);
+      const real = opts.find((o) => /realis|epic.?real|photo|real.?vis|juggernaut/i.test(o));
+      if (real) args[n] = real;
+    }
   }
   const missing = params.filter((p) => !(p.parameter_name in args) && !p.parameter_has_default).map((p) => p.parameter_name);
   if (missing.length) throw new Error(`este Space pede campos que o app não sabe preencher: ${missing.join(", ")}`);
