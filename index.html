@@ -121,8 +121,15 @@
   </label>
   <label for="token">Token do Hugging Face (opcional, aumenta a cota; fica só na memória)</label>
   <input id="token" type="password" autocomplete="off" placeholder="hf_...">
+  <label for="pollkey">Chave Pollinations (opcional — enter.pollinations.ai)</label>
+  <input id="pollkey" type="password" autocomplete="off" placeholder="pk_... ou sk_...">
+  <label for="togkey">Chave Together AI (api.together.ai)</label>
+  <input id="togkey" type="password" autocomplete="off" placeholder="chave da Together">
   <label style="display:flex;align-items:center;gap:8px;margin-top:10px;color:var(--txt)">
-    <input id="remember" type="checkbox" style="width:auto"> Lembrar token neste aparelho
+    <input id="autofb" type="checkbox" checked style="width:auto"> Trocar de provedor sozinho quando a cota acabar
+  </label>
+  <label style="display:flex;align-items:center;gap:8px;margin-top:10px;color:var(--txt)">
+    <input id="remember" type="checkbox" style="width:auto"> Lembrar token e chaves neste aparelho
   </label>
   <label style="display:flex;align-items:center;gap:8px;margin-top:10px;color:var(--txt)">
     <input id="keephist" type="checkbox" style="width:auto"> Guardar conversa neste aparelho
@@ -133,7 +140,7 @@
 </dialog>
 
 <script type="module">
-const VERSAO = "v15";
+const VERSAO = "v16";
 import { Client, handle_file } from "https://cdn.jsdelivr.net/npm/@gradio/client@2.7.1/dist/browser.js";
 
 // Catálogo de modelos (Spaces públicos do Hugging Face). "aceita": o que o modelo recebe.
@@ -144,7 +151,11 @@ const MODELS = [
   { id: "cogvideox",    nome: "CogVideoX 5B",     tipo: "vídeo",  aceita: "ambos",  space: "THUDM/CogVideoX-5B-Space",            desc: "Vídeo a partir de texto ou imagem" },
   { id: "animatediff",  nome: "AnimateDiff Lightning", tipo: "vídeo", aceita: "texto", space: "ByteDance/AnimateDiff-Lightning", desc: "Vídeo curto/loop rápido a partir de texto" },
   { id: "ltx",          nome: "LTX-Video",        tipo: "vídeo",  aceita: "ambos",  space: "Lightricks/ltx-video-distilled",      desc: "Vídeo rápido a partir de texto ou imagem" },
+  { id: "poll-flux",    nome: "FLUX (Pollinations)", tipo: "imagem", aceita: "texto", prov: "pollinations", space: "pollinations.ai", desc: "Outro provedor, cota própria (chave opcional)" },
+  { id: "tog-schnell",  nome: "FLUX schnell (Together)", tipo: "imagem", aceita: "texto", prov: "together", space: "api.together.xyz", desc: "Outro provedor, endpoint grátis (precisa chave)" },
 ];
+// Ordem de troca automática quando a cota do Hugging Face acaba (só texto → imagem).
+const FALLBACK = ["poll-flux", "tog-schnell"];
 let model = MODELS[0];
 
 // Travas exigidas pelas licenças e pela lei:
@@ -362,7 +373,56 @@ async function step(nome, fn) {
   catch (e) { const err = new Error(`${nome}: ${e?.message || e}`); err.etapa = nome; throw err; }
 }
 
+// ---------- Outros provedores (cota própria, fora do Hugging Face) ----------
+async function blobOrRemote(url, init) {
+  // Tenta baixar; se o navegador não puder (CORS), mostra direto do servidor.
+  try {
+    const r = await fetch(url, { cache: "no-store", ...init });
+    if (!r.ok) { const t = (await r.text().catch(() => "")).slice(0, 200); throw new Error(`HTTP ${r.status} ${t}`); }
+    return { blob: await r.blob() };
+  } catch (e) {
+    if (/^HTTP /.test(e.message) || init?.headers) throw e;
+    return { remoteUrl: url, video: false };
+  }
+}
+
+async function genPollinations(prompt) {
+  const [w, h] = $("size").value.split("x").map(Number);
+  const seedTxt = $("seed").value.trim();
+  const seed = seedTxt ? Number(seedTxt) : Math.floor(Math.random() * 1e9);
+  const key = $("pollkey").value.trim();
+  const q = new URLSearchParams({ model: "flux", width: w, height: h, seed, nologo: "true", enhance: "false", safe: "false" });
+  const enc = encodeURIComponent(prompt);
+  const r = key
+    ? await blobOrRemote(`https://gen.pollinations.ai/image/${enc}?${q}`, { headers: { Authorization: `Bearer ${key}` } })
+    : await blobOrRemote(`https://image.pollinations.ai/prompt/${enc}?${q}`);
+  return { ...r, seed };
+}
+
+async function genTogether(prompt) {
+  const key = $("togkey").value.trim();
+  if (!key) throw new Error("coloque a chave da Together AI em Ajustes (⋮)");
+  const [w, h] = $("size").value.split("x").map(Number);
+  const seedTxt = $("seed").value.trim();
+  const body = { model: "black-forest-labs/FLUX.1-schnell-Free", prompt, width: w, height: h, steps: 4, n: 1, response_format: "b64_json" };
+  if (seedTxt) body.seed = Number(seedTxt);
+  const r = await fetch("https://api.together.xyz/v1/images/generations", {
+    method: "POST", headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(`HTTP ${r.status} ${j?.error?.message || JSON.stringify(j).slice(0, 200)}`);
+  const d = j?.data?.[0] || {};
+  if (d.b64_json) {
+    const bytes = Uint8Array.from(atob(d.b64_json), (c) => c.charCodeAt(0));
+    return { blob: new Blob([bytes], { type: "image/png" }), seed: body.seed };
+  }
+  if (d.url) return { ...(await blobOrRemote(d.url)), seed: body.seed };
+  throw new Error("a Together respondeu sem imagem");
+}
+
 async function generate(m, prompt, inputBlob) {
+  if (m.prov === "pollinations") return step("Pollinations", () => genPollinations(prompt));
+  if (m.prov === "together") return step("Together", () => genTogether(prompt));
   const client = await step("conectar ao Space", () => getClient(m.space));
   const api = await step("ler a API do Space", () => client.view_api());
   if (!api) throw new Error("ler a API do Space: o Space não informou sua API");
@@ -481,14 +541,35 @@ async function send() {
   const r = route(!!input);
   if (r.err) { fail(r.err); return; }
   if (r.note) { sys(r.note); record({ t: "sys", text: r.note }); }
-  const m = r.m;
+  let m = r.m;
 
   $("send").disabled = true;
   $("sub").textContent = m.tipo === "vídeo" ? `${m.nome} gerando vídeo… (pode levar minutos)` : `${m.nome} gerando…`;
   const dots = typing();
   const t0 = performance.now();
   try {
-    const { blob, remoteUrl, video: remoteVideo, seed } = await generate(m, prompt, input);
+    let out;
+    try {
+      out = await generate(m, prompt, input);
+    } catch (e) {
+      // Cota do Hugging Face acabou (ou Space fora): tenta os outros provedores, só para texto → imagem.
+      const msg = String(e?.message || e);
+      const canFallback = $("autofb").checked && !input && m.tipo === "imagem" && !m.prov
+        && /quota|exceeded|ZeroGPU|failed to fetch|networkerror|load failed|metadata/i.test(msg);
+      if (!canFallback) throw e;
+      let last = e, prev = m.nome;
+      for (const id of FALLBACK) {
+        const alt = MODELS.find((x) => x.id === id);
+        if (alt.prov === "together" && !$("togkey").value.trim()) continue;
+        sys(`${prev} indisponível (cota/conexão) → tentando ${alt.nome}…`);
+        prev = alt.nome;
+        $("sub").textContent = `${alt.nome} gerando…`;
+        try { out = await generate(alt, prompt, null); m = alt; break; }
+        catch (e2) { last = e2; }
+      }
+      if (!out) throw last;
+    }
+    const { blob, remoteUrl, video: remoteVideo, seed } = out;
     dots.remove();
     const secs = ((performance.now() - t0) / 1000).toFixed(0);
     const fictional = !input || fictionalInput;
@@ -508,7 +589,7 @@ async function send() {
         ? `O Space de ${m.nome} (${m.space}) está fora do ar, pausado ou mudou de endereço. Escolha outro modelo ou informe outro Space no seletor.`
         : /failed to fetch|networkerror|load failed/i.test(msg)
           ? `Sem resposta do servidor de ${m.nome} ao ${e.etapa || "conectar"}. O Space pode estar pausado, lotado ou fora do ar. Para descobrir o motivo: ⋮ → 🔍 Testar conexão.\n(${VERSAO} · detalhe: ${msg})`
-          : `Não consegui gerar com ${m.nome}: ${msg}`);
+          : `Não consegui gerar com ${m.nome}${/^(Pollinations|Together):/.test(msg) ? " nem com os outros provedores" : ""}: ${msg}`);
   } finally {
     $("send").disabled = false;
     $("sub").textContent = subText();
@@ -531,17 +612,16 @@ $("unattach").onclick = () => setAttach(null);
 $("gear").onclick = () => $("settings").showModal();
 // Token salvo só se o usuário marcar "Lembrar" (única gravação do app no aparelho).
 const TOKEN_KEY = "uxia_hf_token";
+const KEY_FIELDS = { token: TOKEN_KEY, pollkey: "uxia_poll_key", togkey: "uxia_together_key" };
 function saveTokenPref() {
-  const token = $("token").value.trim();
-  try {
-    if ($("remember").checked && token) localStorage.setItem(TOKEN_KEY, token);
-    else localStorage.removeItem(TOKEN_KEY);
-  } catch {}
+  for (const [id, key] of Object.entries(KEY_FIELDS)) {
+    const v = $(id).value.trim();
+    try { ($("remember").checked && v) ? localStorage.setItem(key, v) : localStorage.removeItem(key); } catch {}
+  }
 }
-try {
-  const saved = localStorage.getItem(TOKEN_KEY);
-  if (saved) { $("token").value = saved; $("remember").checked = true; }
-} catch {}
+for (const [id, key] of Object.entries(KEY_FIELDS)) {
+  try { const v = localStorage.getItem(key); if (v) { $(id).value = v; $("remember").checked = true; } } catch {}
+}
 $("keephist").checked = keepHistory;
 $("okset").onclick = () => {
   saveTokenPref();
