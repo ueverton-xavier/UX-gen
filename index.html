@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Cache-Control" content="no-store">
+<meta name="theme-color" content="#1f2c34">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Estúdio IA</title>
+<style>
+  :root {
+    --bg:#0b141a; --bar:#1f2c34; --me:#005c4b; --bot:#1f2c34; --txt:#e9edef; --mut:#8696a0;
+    --acc:#00a884; --err:#ff7a7a; --input:#2a3942;
+  }
+  * { box-sizing:border-box; }
+  html, body { height:100%; margin:0; }
+  body { background:var(--bg); color:var(--txt); font:15px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; display:flex; flex-direction:column; }
+  header { display:flex; align-items:center; gap:10px; padding:10px 12px; background:var(--bar); }
+  .avatar { width:38px; height:38px; border-radius:50%; background:linear-gradient(135deg,#00a884,#7c9cff); display:grid; place-items:center; font-weight:800; color:#0b141a; }
+  header .who { flex:1; min-width:0; }
+  header .name { font-weight:600; background:none; border:0; color:var(--txt); font:inherit; font-weight:600; padding:0; display:flex; align-items:center; gap:4px; max-width:100%; }
+  header .name span { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  header .name svg { width:18px; height:18px; fill:var(--mut); flex:none; }
+  .models { display:flex; flex-direction:column; gap:6px; max-height:60vh; overflow-y:auto; }
+  .opt { display:flex; gap:10px; align-items:flex-start; text-align:left; background:var(--input); border:2px solid transparent; border-radius:10px; padding:10px; color:var(--txt); font:inherit; }
+  .opt.sel { border-color:var(--acc); }
+  .opt b { display:block; }
+  .opt small { color:var(--mut); }
+  .tag { font-size:11px; padding:1px 6px; border-radius:6px; background:#103529; color:#7fe0bf; margin-left:6px; }
+  .tag.v { background:#2d2340; color:#c8b4ff; }
+  header .sub { font-size:12px; color:var(--mut); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .icon { background:none; border:0; color:var(--mut); padding:8px; border-radius:50%; display:grid; place-items:center; }
+  .icon svg { width:22px; height:22px; fill:currentColor; }
+  #chat { flex:1; overflow-y:auto; padding:12px 10px 4px; display:flex; flex-direction:column; gap:6px; }
+  .msg { max-width:82%; padding:6px 8px 4px; border-radius:10px; word-wrap:break-word; position:relative; }
+  .me { align-self:flex-end; background:var(--me); border-top-right-radius:2px; }
+  .bot { align-self:flex-start; background:var(--bot); border-top-left-radius:2px; }
+  .sys { align-self:center; background:#182229; color:var(--mut); font-size:12.5px; padding:6px 10px; border-radius:8px; max-width:92%; text-align:center; }
+  .msg video { display:block; width:100%; max-width:320px; border-radius:8px; margin-bottom:4px; background:#000; }
+  .msg img { display:block; width:100%; max-width:320px; border-radius:8px; margin-bottom:4px; }
+  .msg .t { white-space:pre-wrap; }
+  .msg .time { font-size:11px; color:rgba(233,237,239,.6); text-align:right; margin-top:2px; }
+  .msg.err .t { color:var(--err); }
+  .acts { display:flex; gap:6px; margin-top:4px; }
+  .acts button { flex:1; background:rgba(255,255,255,.08); color:var(--txt); border:0; border-radius:8px; padding:8px 6px; font-size:13px; }
+  .typing span { display:inline-block; width:7px; height:7px; margin:0 2px; border-radius:50%; background:var(--mut); animation:b 1.2s infinite; }
+  .typing span:nth-child(2){animation-delay:.2s} .typing span:nth-child(3){animation-delay:.4s}
+  @keyframes b { 0%,60%,100%{opacity:.3; transform:translateY(0)} 30%{opacity:1; transform:translateY(-3px)} }
+  #preview { display:none; align-items:center; gap:8px; padding:8px 12px; background:var(--bar); border-top:1px solid #2a3942; }
+  #preview img { width:48px; height:48px; object-fit:cover; border-radius:6px; }
+  #preview .lbl { flex:1; font-size:13px; color:var(--mut); }
+  footer { display:flex; align-items:flex-end; gap:6px; padding:8px; background:var(--bg); }
+  .box { flex:1; display:flex; align-items:flex-end; background:var(--input); border-radius:22px; padding:2px 4px 2px 12px; }
+  textarea { flex:1; background:none; border:0; color:var(--txt); font:inherit; resize:none; max-height:120px; padding:10px 0; outline:none; }
+  #send { width:46px; height:46px; border-radius:50%; border:0; background:var(--acc); color:#0b141a; display:grid; place-items:center; flex:none; }
+  #send svg { width:22px; height:22px; fill:currentColor; }
+  #send:disabled { opacity:.5; }
+  dialog { background:var(--bar); color:var(--txt); border:0; border-radius:14px; width:min(92vw,420px); padding:16px; }
+  dialog::backdrop { background:rgba(0,0,0,.6); }
+  dialog h2 { font-size:17px; margin:0 0 8px; }
+  dialog label { display:block; font-size:13px; color:var(--mut); margin:10px 0 4px; }
+  dialog select, dialog input { width:100%; background:var(--input); color:var(--txt); border:0; border-radius:8px; padding:10px; font:inherit; }
+  dialog .row { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  dialog .ok { width:100%; margin-top:14px; padding:12px; border:0; border-radius:10px; background:var(--acc); color:#0b141a; font-weight:700; }
+</style>
+</head>
+<body>
+<header>
+  <div class="avatar">F</div>
+  <div class="who">
+    <button class="name" id="pick" aria-label="Escolher modelo"><span id="mname">FLUX.1 [dev]</span><svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg></button>
+    <div class="sub" id="sub">online · nada é salvo neste aparelho</div>
+  </div>
+  <button class="icon" id="clear" aria-label="Limpar conversa"><svg viewBox="0 0 24 24"><path d="M6 19a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg></button>
+  <button class="icon" id="gear" aria-label="Ajustes"><svg viewBox="0 0 24 24"><path d="M12 8a2 2 0 1 0 0-4 2 2 0 0 0 0 4zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm0 6a2 2 0 1 0 0 4 2 2 0 0 0 0-4z"/></svg></button>
+</header>
+
+<div id="chat"></div>
+
+<div id="preview">
+  <img alt="">
+  <div class="lbl" id="plbl">Imagem anexada — escreva o pedido</div>
+  <button class="icon" id="unattach" aria-label="Remover anexo"><svg viewBox="0 0 24 24"><path d="M19 6.4 17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19l5.6-5.6 5.6 5.6 1.4-1.4-5.6-5.6z"/></svg></button>
+</div>
+
+<footer>
+  <div class="box">
+    <textarea id="text" rows="1" placeholder="Mensagem"></textarea>
+    <button class="icon" id="clip" aria-label="Anexar imagem"><svg viewBox="0 0 24 24"><path d="M16.5 6v11.5a4 4 0 0 1-8 0V5a2.5 2.5 0 0 1 5 0v10.5a1 1 0 0 1-2 0V6H10v9.5a2.5 2.5 0 0 0 5 0V5a4 4 0 0 0-8 0v12.5a5.5 5.5 0 0 0 11 0V6h-1.5z"/></svg></button>
+    <input id="file" type="file" accept="image/*" hidden>
+  </div>
+  <button id="send" aria-label="Enviar"><svg viewBox="0 0 24 24"><path d="M2 21 23 12 2 3v7l15 2-15 2z"/></svg></button>
+</footer>
+
+<dialog id="picker">
+  <h2>Escolha o modelo</h2>
+  <div class="models" id="models"></div>
+  <label for="custom">Outro Space do Hugging Face (dono/nome)</label>
+  <input id="custom" autocomplete="off" placeholder="ex.: Lightricks/ltx-video-distilled">
+  <button class="ok" id="okpick">Usar</button>
+</dialog>
+
+<dialog id="settings">
+  <h2>Ajustes</h2>
+  <label for="size">Formato (modelos de imagem)</label>
+  <select id="size">
+    <option value="1024x1024">Quadrado 1024×1024</option>
+    <option value="768x1344">Retrato 768×1344</option>
+    <option value="1344x768">Paisagem 1344×768</option>
+  </select>
+  <div class="row">
+    <div><label for="steps">Passos (vazio = padrão)</label><input id="steps" type="number" min="1" max="50" placeholder="auto"></div>
+    <div><label for="seed">Seed (vazio = aleatória)</label><input id="seed" type="number" min="0" placeholder="aleatória"></div>
+  </div>
+  <label for="token">Token do Hugging Face (opcional, aumenta a cota; fica só na memória)</label>
+  <input id="token" type="password" autocomplete="off" placeholder="hf_...">
+  <button class="ok" id="okset">Pronto</button>
+</dialog>
+
+<script type="module">
+import { Client, handle_file } from "https://cdn.jsdelivr.net/npm/@gradio/client@1.8.0/+esm";
+
+// Catálogo de modelos (Spaces públicos do Hugging Face). "aceita": o que o modelo recebe.
+const MODELS = [
+  { id: "flux-dev",     nome: "FLUX.1 [dev]",     tipo: "imagem", aceita: "texto",  space: "black-forest-labs/FLUX.1-dev",        desc: "Melhor qualidade de imagem" },
+  { id: "flux-schnell", nome: "FLUX.1 [schnell]", tipo: "imagem", aceita: "texto",  space: "black-forest-labs/FLUX.1-schnell",    desc: "Imagem em segundos" },
+  { id: "flux-kontext", nome: "FLUX.1 Kontext",   tipo: "imagem", aceita: "imagem", space: "black-forest-labs/FLUX.1-Kontext-Dev", desc: "Edita uma imagem anexada" },
+  { id: "cogvideox",    nome: "CogVideoX 5B",     tipo: "vídeo",  aceita: "ambos",  space: "THUDM/CogVideoX-5B-Space",            desc: "Vídeo a partir de texto ou imagem" },
+  { id: "animatediff",  nome: "AnimateDiff Lightning", tipo: "vídeo", aceita: "texto", space: "ByteDance/AnimateDiff-Lightning", desc: "Vídeo curto/loop rápido a partir de texto" },
+  { id: "ltx",          nome: "LTX-Video",        tipo: "vídeo",  aceita: "ambos",  space: "Lightricks/ltx-video-distilled",      desc: "Vídeo rápido a partir de texto ou imagem" },
+];
+let model = MODELS[0];
+
+// Travas exigidas pelas licenças e pela lei:
+// 1) nada sexual envolvendo menores; 2) nada de nudez/sexo a partir de foto anexada (pessoa real, sem consentimento verificável).
+const W = (s) => new RegExp(`(?<![\\p{L}\\d])(${s})(?![\\p{L}\\d])`, "iu");
+const MINOR = W("crian[cç]as?|menin[oa]s?|menor(es)? de idade|infantil|beb[eê]s?|adolescentes?|novinh[oa]s?|colegial|child(ren)?|kids?|minors?|underage|teens?|teenagers?|toddlers?|loli|shota|preteen|schoolgirl|schoolboy|(?:[1-9]|1[0-7])\\s*(anos|years?\\s*old|yo)");
+const SEXUAL = W("nu[ae]?s?|nudez|pelad[oa]s?|despi\\w*|tir[ae]\\w* a roupa|sem roupa|sexo|sexual|er[oó]tic[oa]|porn\\w*|nsfw|nude|naked|undress\\w*|sex\\w*|erotic|topless|lingerie|bikini|biqu[ií]ni|transparen\\w*|see[- ]?through|sheer|explicit");
+
+const $ = (id) => document.getElementById(id);
+const chat = $("chat");
+const urls = new Set();          // object URLs vivos (revogados ao limpar)
+let attached = null;             // Blob anexado aguardando envio
+const clients = {};
+
+const now = () => new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+const scroll = () => chat.scrollTo({ top: chat.scrollHeight, behavior: "smooth" });
+const objUrl = (blob) => { const u = URL.createObjectURL(blob); urls.add(u); return u; };
+const isVideo = (blob) => blob.type.startsWith("video/");
+
+function bubble(cls, { text, img, video, actions } = {}) {
+  const el = document.createElement("div");
+  el.className = "msg " + cls;
+  if (img) { const i = document.createElement("img"); i.src = img; i.alt = ""; el.append(i); }
+  if (video) { const v = document.createElement("video"); Object.assign(v, { src: video, controls: true, loop: true, muted: true, autoplay: true, playsInline: true }); el.append(v); }
+  if (text) { const t = document.createElement("div"); t.className = "t"; t.textContent = text; el.append(t); }
+  if (actions) {
+    const a = document.createElement("div"); a.className = "acts";
+    for (const [label, fn] of actions) { const b = document.createElement("button"); b.textContent = label; b.onclick = fn; a.append(b); }
+    el.append(a);
+  }
+  const tm = document.createElement("div"); tm.className = "time"; tm.textContent = now(); el.append(tm);
+  chat.append(el); scroll();
+  return el;
+}
+
+function sys(text) {
+  const el = document.createElement("div"); el.className = "sys"; el.textContent = text; chat.append(el); scroll();
+}
+
+function typing() {
+  const el = document.createElement("div");
+  el.className = "msg bot typing";
+  el.innerHTML = "<span></span><span></span><span></span>";
+  chat.append(el); scroll();
+  return el;
+}
+
+function setAttach(blob) {
+  attached = blob;
+  $("preview").style.display = blob ? "flex" : "none";
+  if (blob) { $("preview").querySelector("img").src = objUrl(blob); $("text").focus(); }
+}
+
+function setModel(m, announce = true) {
+  model = m;
+  $("mname").textContent = m.nome;
+  $("text").placeholder = m.aceita === "imagem" ? "Anexe uma imagem e diga o que mudar" : `Descreva o ${m.tipo === "vídeo" ? "vídeo" : "que criar"}`;
+  if (announce) sys(`Modelo: ${m.nome} — ${m.desc}`);
+}
+
+// ---------- Escolha de modelo ----------
+function renderModels() {
+  const box = $("models"); box.replaceChildren();
+  for (const m of MODELS) {
+    const b = document.createElement("button");
+    b.className = "opt" + (m === model ? " sel" : "");
+    b.innerHTML = `<div><b></b><small></small></div>`;
+    b.querySelector("b").textContent = m.nome;
+    const tag = document.createElement("span"); tag.className = "tag" + (m.tipo === "vídeo" ? " v" : ""); tag.textContent = m.tipo;
+    b.querySelector("b").append(tag);
+    b.querySelector("small").textContent = `${m.desc} · aceita ${m.aceita === "ambos" ? "texto ou imagem" : m.aceita}`;
+    b.onclick = () => { $("picker").close(); $("custom").value = ""; if (m !== model) setModel(m); };
+    box.append(b);
+  }
+}
+$("pick").onclick = () => { renderModels(); $("picker").showModal(); };
+$("okpick").onclick = () => {
+  const sp = $("custom").value.trim();
+  $("picker").close();
+  if (!/^[\w.-]+\/[\w.-]+$/.test(sp)) return;
+  const m = { id: "custom:" + sp, nome: sp.split("/")[1], tipo: "imagem/vídeo", aceita: "ambos", space: sp, desc: "Space personalizado" };
+  MODELS.push(m); setModel(m);
+};
+
+// ---------- Chamada adaptativa à API do Space ----------
+// Lê a API do Space (view_api) e preenche só os parâmetros que existem nele.
+async function getClient(space) {
+  const token = $("token").value.trim();
+  const key = space + (token ? ":t" : "");
+  if (!clients[key]) clients[key] = await Client.connect(space, token ? { hf_token: token } : {});
+  return clients[key];
+}
+
+const PROMPT_NAMES = /^(prompt|text|positive_prompt|prompt_text|input_text|text_prompt|description|caption|instruction)$/i;
+const isImageParam = (p) => /image/i.test(p.component || "") || (/image/i.test(p.parameter_name) && !/size|width|height|guidance|strength|num/i.test(p.parameter_name));
+
+function findPrompt(params) {
+  return params.find((p) => PROMPT_NAMES.test(p.parameter_name))
+      || params.find((p) => /textbox/i.test(p.component || "") && !/negative|neg_/i.test(p.parameter_name));
+}
+
+function pickEndpoint(api, hasImage) {
+  const eps = Object.entries(api.named_endpoints || {});
+  let best = null, bestScore = -Infinity;
+  for (const [name, ep] of eps) {
+    const ps = ep.parameters || [];
+    if (!findPrompt(ps)) continue;
+    const img = ps.find(isImageParam);
+    let score = 0;
+    if (hasImage && img) score += 3;
+    if (!hasImage && img && !img.parameter_has_default) score -= 5;
+    if (/^\/(infer|generate|run|predict|generate_video|generate_image|text_to_video|image_to_video)/.test(name)) score += 2;
+    if (hasImage && /image_to_video|i2v|img2/.test(name)) score += 2;
+    if (!hasImage && /text_to_video|t2v|txt2/.test(name)) score += 2;
+    if (/^\/(lambda|update|change|reset|clear|random|example|load|on_)/.test(name)) score -= 4;
+    score -= ps.filter((p) => !p.parameter_has_default).length * 0.1;
+    if (score > bestScore) { best = [name, ep]; bestScore = score; }
+  }
+  return best;
+}
+
+function buildArgs(params, prompt, imageBlob) {
+  const args = {};
+  const pp = findPrompt(params); args[pp.parameter_name] = prompt;
+  const imgP = params.find(isImageParam);
+  if (imageBlob && imgP) args[imgP.parameter_name] = handle_file(imageBlob);
+  const seedTxt = $("seed").value.trim();
+  const stepsTxt = $("steps").value.trim();
+  const [w, h] = $("size").value.split("x").map(Number);
+  for (const p of params) {
+    const n = p.parameter_name;
+    if (/^seed(_value)?$/i.test(n) && seedTxt) args[n] = Number(seedTxt);
+    else if (/random/i.test(n) && /seed/i.test(n)) args[n] = !seedTxt;
+    else if (/^(num_inference_steps|steps|num_steps|step)$/i.test(n) && stepsTxt && /number|slider/i.test(p.component || "")) args[n] = Number(stepsTxt);
+    else if (/^width$/i.test(n) && model.tipo === "imagem") args[n] = w;
+    else if (/^height$/i.test(n) && model.tipo === "imagem") args[n] = h;
+  }
+  const missing = params.filter((p) => !(p.parameter_name in args) && !p.parameter_has_default).map((p) => p.parameter_name);
+  if (missing.length) throw new Error(`este Space pede campos que o app não sabe preencher: ${missing.join(", ")}`);
+  return args;
+}
+
+// Acha o primeiro arquivo (imagem ou vídeo) na resposta, em qualquer formato.
+function findFile(x) {
+  if (!x || typeof x !== "object") return null;
+  if (typeof x.url === "string") return x;
+  if (x.video) return findFile(x.video);
+  for (const v of Array.isArray(x) ? x : Object.values(x)) { const f = findFile(v); if (f) return f; }
+  return null;
+}
+const findSeed = (data) => data.find((d) => typeof d === "number");
+
+async function generate(m, prompt, inputBlob) {
+  const client = await getClient(m.space);
+  const api = await client.view_api();
+  const picked = pickEndpoint(api, !!inputBlob);
+  if (!picked) throw new Error("não encontrei na API deste Space uma função que receba texto");
+  const [endpoint, ep] = picked;
+  const args = buildArgs(ep.parameters, prompt, inputBlob);
+  const res = await client.predict(endpoint, args);
+  const file = findFile(res.data);
+  if (!file) throw new Error("o Space respondeu sem imagem nem vídeo");
+  const blob = await (await fetch(file.url, { cache: "no-store" })).blob();
+  const typed = blob.type ? blob : new Blob([blob], { type: /\.(mp4|webm|mov)(\?|$)/i.test(file.url) ? "video/mp4" : "image/png" });
+  return { blob: typed, seed: findSeed(res.data) };
+}
+
+// ---------- Fluxo da conversa ----------
+function blocked(prompt, hasImage) {
+  if (MINOR.test(prompt) && SEXUAL.test(prompt)) return "Não posso gerar conteúdo sexual envolvendo menores.";
+  if (hasImage && SEXUAL.test(prompt)) return "Não gero nudez ou conteúdo sexual a partir de foto anexada — pode ser uma pessoa real sem consentimento. Para isso, descreva uma cena fictícia só com texto.";
+  return null;
+}
+
+// Escolhe o modelo certo para o que foi enviado (ex.: imagem anexada num modelo só de texto → Kontext).
+function route(hasImage) {
+  if (hasImage && model.aceita === "texto") {
+    if (model.tipo === "imagem") return { m: MODELS.find((x) => x.id === "flux-kontext"), note: "Imagem anexada → usando FLUX.1 Kontext para editar." };
+    return { m: MODELS.find((x) => x.id === "ltx"), note: `${model.nome} não aceita imagem → usando LTX-Video.` };
+  }
+  if (!hasImage && model.aceita === "imagem") return { err: `${model.nome} edita imagens: toque no clipe e anexe uma.` };
+  return { m: model };
+}
+
+async function send() {
+  const prompt = $("text").value.trim();
+  if (!prompt) return;
+  const input = attached;
+  bubble("me", { text: prompt, img: input ? objUrl(input) : null });
+  $("text").value = ""; autosize(); setAttach(null);
+
+  const why = blocked(prompt, !!input);
+  if (why) { bubble("bot err", { text: why }); return; }
+  const r = route(!!input);
+  if (r.err) { bubble("bot err", { text: r.err }); return; }
+  if (r.note) sys(r.note);
+  const m = r.m;
+
+  $("send").disabled = true;
+  $("sub").textContent = m.tipo === "vídeo" ? `${m.nome} gerando vídeo… (pode levar minutos)` : `${m.nome} gerando…`;
+  const dots = typing();
+  const t0 = performance.now();
+  try {
+    const { blob, seed } = await generate(m, prompt, input);
+    dots.remove();
+    const url = objUrl(blob);
+    const video = isVideo(blob);
+    const ext = (blob.type.split("/")[1] || (video ? "mp4" : "webp")).replace("jpeg", "jpg").replace("quicktime", "mov");
+    const secs = ((performance.now() - t0) / 1000).toFixed(0);
+    const actions = [["Salvar", () => { const a = document.createElement("a"); a.href = url; a.download = `${m.id}-${seed ?? Date.now()}.${ext}`; a.click(); }]];
+    if (!video) {
+      actions.push(["Editar", () => { setModel(MODELS.find((x) => x.id === "flux-kontext")); setAttach(blob); }]);
+      actions.push(["Animar", () => { setModel(MODELS.find((x) => x.id === "ltx")); setAttach(blob); }]);
+    }
+    bubble("bot", { [video ? "video" : "img"]: url, text: `${m.nome} · ${secs}s${seed != null ? " · seed " + seed : ""}`, actions });
+  } catch (e) {
+    dots.remove();
+    const msg = String(e?.message || e);
+    bubble("bot err", { text: /quota|exceeded|ZeroGPU/i.test(msg)
+      ? "Cota gratuita esgotada por agora. Tente mais tarde ou coloque um token do Hugging Face em Ajustes (⋮)."
+      : /metadata could not be loaded|could not resolve|not found|paused|sleeping|runtime error/i.test(msg)
+        ? `O Space de ${m.nome} (${m.space}) está fora do ar, pausado ou mudou de endereço. Escolha outro modelo ou informe outro Space no seletor.`
+        : `Não consegui gerar com ${m.nome}: ${msg}` });
+  } finally {
+    $("send").disabled = false;
+    $("sub").textContent = "online · nada é salvo neste aparelho";
+  }
+}
+
+function autosize() { const t = $("text"); t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, 120) + "px"; }
+
+$("text").addEventListener("input", autosize);
+$("text").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !matchMedia("(pointer:coarse)").matches) { e.preventDefault(); send(); } });
+$("send").onclick = send;
+$("clip").onclick = () => $("file").click();
+$("file").onchange = () => { const f = $("file").files[0]; $("file").value = ""; if (f) setAttach(f); };
+$("unattach").onclick = () => setAttach(null);
+$("gear").onclick = () => $("settings").showModal();
+$("okset").onclick = () => $("settings").close();
+$("clear").onclick = () => {
+  for (const u of urls) URL.revokeObjectURL(u);
+  urls.clear(); chat.replaceChildren(); setAttach(null); hello();
+};
+
+function hello() {
+  sys("Conversa só na memória: ao fechar, tudo some. Use “Salvar” para baixar.");
+  bubble("bot", { text: "Oi! Toque no nome do modelo lá em cima para escolher (imagem ou vídeo). Escreva o que quer criar — ou anexe uma imagem pelo clipe e diga o que fazer com ela." });
+}
+setModel(model, false);
+hello();
+if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
+</script>
+</body>
+</html>
