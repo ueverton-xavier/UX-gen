@@ -285,19 +285,33 @@ function findFile(x) {
 }
 const findSeed = (data) => data.find((d) => typeof d === "number");
 
+// Cada etapa marca onde falhou, para o erro dizer exatamente o que aconteceu.
+async function step(nome, fn) {
+  try { return await fn(); }
+  catch (e) { const err = new Error(`${nome}: ${e?.message || e}`); err.etapa = nome; throw err; }
+}
+
 async function generate(m, prompt, inputBlob) {
-  const client = await getClient(m.space);
-  const api = await client.view_api();
+  const client = await step("conectar ao Space", () => getClient(m.space));
+  const api = await step("ler a API do Space", () => client.view_api());
+  if (!api) throw new Error("ler a API do Space: o Space não informou sua API");
   const picked = pickEndpoint(api, !!inputBlob);
   if (!picked) throw new Error("não encontrei na API deste Space uma função que receba texto");
   const [endpoint, ep] = picked;
   const args = buildArgs(ep.parameters, prompt, inputBlob);
-  const res = await client.predict(endpoint, args);
+  const res = await step(`gerar (${endpoint})`, () => client.predict(endpoint, args));
   const file = findFile(res.data);
   if (!file) throw new Error("o Space respondeu sem imagem nem vídeo");
-  const blob = await (await fetch(file.url, { cache: "no-store" })).blob();
-  const typed = blob.type ? blob : new Blob([blob], { type: /\.(mp4|webm|mov)(\?|$)/i.test(file.url) ? "video/mp4" : "image/png" });
-  return { blob: typed, seed: findSeed(res.data) };
+  const seed = findSeed(res.data);
+  const videoUrl = /\.(mp4|webm|mov)(\?|$)/i.test(file.url) || /video/.test(file.mime_type || "");
+  try {
+    const blob = await (await fetch(file.url, { cache: "no-store" })).blob();
+    const typed = blob.type ? blob : new Blob([blob], { type: videoUrl ? "video/mp4" : "image/png" });
+    return { blob: typed, seed };
+  } catch {
+    // Sem permissão para baixar pelo app: mostra direto do servidor do Space.
+    return { remoteUrl: file.url, video: videoUrl, seed };
+  }
 }
 
 // ---------- Fluxo da conversa ----------
@@ -336,14 +350,14 @@ async function send() {
   const dots = typing();
   const t0 = performance.now();
   try {
-    const { blob, seed } = await generate(m, prompt, input);
+    const { blob, remoteUrl, video: remoteVideo, seed } = await generate(m, prompt, input);
     dots.remove();
-    const url = objUrl(blob);
-    const video = isVideo(blob);
-    const ext = (blob.type.split("/")[1] || (video ? "mp4" : "webp")).replace("jpeg", "jpg").replace("quicktime", "mov");
+    const url = blob ? objUrl(blob) : remoteUrl;
+    const video = blob ? isVideo(blob) : remoteVideo;
+    const ext = ((blob?.type || "").split("/")[1] || (video ? "mp4" : "webp")).replace("jpeg", "jpg").replace("quicktime", "mov");
     const secs = ((performance.now() - t0) / 1000).toFixed(0);
     const actions = [["Salvar", () => { const a = document.createElement("a"); a.href = url; a.download = `${m.id}-${seed ?? Date.now()}.${ext}`; a.click(); }]];
-    if (!video) {
+    if (!video && blob) {
       actions.push(["Editar", () => { setModel(MODELS.find((x) => x.id === "flux-kontext")); setAttach(blob); }]);
       actions.push(["Animar", () => { setModel(MODELS.find((x) => x.id === "ltx")); setAttach(blob); }]);
     }
@@ -355,7 +369,9 @@ async function send() {
       ? "Cota gratuita esgotada por agora. Tente mais tarde ou coloque um token do Hugging Face em Ajustes (⋮)."
       : /metadata could not be loaded|could not resolve|not found|paused|sleeping|runtime error/i.test(msg)
         ? `O Space de ${m.nome} (${m.space}) está fora do ar, pausado ou mudou de endereço. Escolha outro modelo ou informe outro Space no seletor.`
-        : `Não consegui gerar com ${m.nome}: ${msg}` });
+        : /failed to fetch|networkerror|load failed/i.test(msg)
+          ? `Sem resposta do servidor de ${m.nome} ao ${e.etapa || "conectar"}. O Space pode estar pausado, lotado ou fora do ar. Tente FLUX.1 [schnell] ou outro modelo pelo seletor lá em cima.\n(detalhe: ${msg})`
+          : `Não consegui gerar com ${m.nome}: ${msg}` });
   } finally {
     $("send").disabled = false;
     $("sub").textContent = "online · nada é salvo neste aparelho";
