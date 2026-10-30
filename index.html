@@ -133,7 +133,7 @@
 </dialog>
 
 <script type="module">
-const VERSAO = "v14";
+const VERSAO = "v15";
 import { Client, handle_file } from "https://cdn.jsdelivr.net/npm/@gradio/client@2.7.1/dist/browser.js";
 
 // Catálogo de modelos (Spaces públicos do Hugging Face). "aceita": o que o modelo recebe.
@@ -501,7 +501,9 @@ async function send() {
     dots.remove();
     const msg = String(e?.message || e);
     fail(/quota|exceeded|ZeroGPU/i.test(msg)
-      ? "Cota gratuita esgotada por agora. Tente mais tarde ou coloque um token do Hugging Face em Ajustes (⋮)."
+      ? ($("token").value.trim()
+          ? `Cota de GPU da sua conta Hugging Face esgotada por agora. Ela volta sozinha com o tempo; FLUX.1 [schnell] gasta bem menos. O Hugging Face PRO dá várias vezes mais cota.\n(Hugging Face: ${msg.replace(/^gerar \([^)]*\): /, "").slice(0, 220)})`
+          : `Cota gratuita esgotada por agora. Coloque seu token do Hugging Face em Ajustes (⋮) para usar a cota da sua conta, ou tente mais tarde.\n(Hugging Face: ${msg.replace(/^gerar \([^)]*\): /, "").slice(0, 220)})`)
       : /metadata could not be loaded|could not resolve|not found|paused|sleeping|runtime error/i.test(msg)
         ? `O Space de ${m.nome} (${m.space}) está fora do ar, pausado ou mudou de endereço. Escolha outro modelo ou informe outro Space no seletor.`
         : /failed to fetch|networkerror|load failed/i.test(msg)
