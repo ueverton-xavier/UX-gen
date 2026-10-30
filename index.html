@@ -144,7 +144,7 @@
 </dialog>
 
 <script type="module">
-const VERSAO = "v17";
+const VERSAO = "v18";
 import { Client, handle_file } from "https://cdn.jsdelivr.net/npm/@gradio/client@2.7.1/dist/browser.js";
 
 // Catálogo de modelos (Spaces públicos do Hugging Face). "aceita": o que o modelo recebe.
@@ -432,7 +432,10 @@ const CIVITAI = "https://orchestration.civitai.com";
 async function civitaiRun(stepObj, headers) {
   const r = await fetch(`${CIVITAI}/v2/consumer/workflows?wait=60`, { method: "POST", headers, body: JSON.stringify({ steps: [stepObj] }) });
   let wf = await r.json().catch(() => ({}));
-  if (!r.ok && r.status !== 202) { const e = new Error(`HTTP ${r.status} ${JSON.stringify(wf).slice(0, 240)}`); e.status = r.status; throw e; }
+  if (!r.ok && r.status !== 202) {
+    const detail = wf?.errors ? JSON.stringify(wf.errors) : JSON.stringify(wf);
+    const e = new Error(`HTTP ${r.status} ${detail.slice(0, 600)}`); e.status = r.status; throw e;
+  }
   const t0 = Date.now();
   const fileOf = (w) => (w?.steps || []).flatMap((st) => [...(st?.output?.blobs || []), ...(st?.output?.images || [])]).find((b) => b?.url);
   while (!fileOf(wf) && !["failed", "expired", "canceled"].includes(wf?.status)) {
@@ -455,7 +458,24 @@ async function genCivitai(prompt) {
   const seedTxt = $("seed").value.trim();
   const stepsTxt = $("steps").value.trim();
   const headers = { Authorization: `Bearer ${key}`, "Content-Type": "application/json" };
-  const imageGen = { $type: "imageGen", input: { engine: "flux", prompt, width: w, height: h } };
+  // Engines válidos informados pela própria API (400): openai, flux1-kontext, flux1-pro, flux2, google, wan, gemini, sd…
+  // Tenta variações em ordem até uma passar na validação.
+  const base = { prompt, width: w, height: h };
+  const CANDIDATOS = [
+    { engine: "flux2", model: "klein", ...base },
+    { engine: "flux2", model: "klein", operation: "createImage", ...base },
+    { engine: "flux2", model: "klein", size: "9b", ...base },
+    { engine: "flux2", ...base },
+    { engine: "flux1-pro", ...base },
+  ];
+  const imageGenRun = async () => {
+    let last;
+    for (const input of CANDIDATOS) {
+      try { return await civitaiRun({ $type: "imageGen", input }, headers); }
+      catch (e) { if (e.status !== 400) throw e; last = e; }
+    }
+    throw last;
+  };
   let url;
   if (air) {
     const flux = /:flux/i.test(air);
@@ -463,9 +483,9 @@ async function genCivitai(prompt) {
     if (!flux) input.negativePrompt = "lowres, bad anatomy, bad hands, deformed, blurry, watermark, text";
     if (seedTxt) input.seed = Number(seedTxt);
     try { url = await civitaiRun({ $type: "textToImage", input }, headers); }
-    catch (e) { if (e.status !== 400) throw e; sys("Civitai recusou o formato com AIR → usando o FLUX padrão do Civitai."); url = await civitaiRun(imageGen, headers); }
+    catch (e) { if (e.status !== 400) throw e; sys("Civitai recusou o formato com AIR → usando o FLUX 2 do Civitai."); url = await imageGenRun(); }
   } else {
-    url = await civitaiRun(imageGen, headers);
+    url = await imageGenRun();
   }
   return { ...(await blobOrRemote(url)), seed: seedTxt ? Number(seedTxt) : undefined };
 }
