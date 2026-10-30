@@ -121,13 +121,16 @@
   <label style="display:flex;align-items:center;gap:8px;margin-top:10px;color:var(--txt)">
     <input id="remember" type="checkbox" style="width:auto"> Lembrar token neste aparelho
   </label>
-  <small style="color:var(--mut);display:block;margin-top:4px">Única coisa que o app grava. Desmarque e toque em Pronto para apagar.</small>
+  <label style="display:flex;align-items:center;gap:8px;margin-top:10px;color:var(--txt)">
+    <input id="keephist" type="checkbox" style="width:auto"> Guardar conversa neste aparelho
+  </label>
+  <small style="color:var(--mut);display:block;margin-top:4px">Só grava o que estiver marcado. Desmarque e toque em Pronto para apagar do aparelho.</small>
   <button class="ok" id="okset">Pronto</button>
   <button class="ok" id="diag" style="background:transparent;color:var(--acc);border:1px solid var(--acc)">🔍 Testar conexão do modelo atual</button>
 </dialog>
 
 <script type="module">
-const VERSAO = "v8";
+const VERSAO = "v9";
 import { Client, handle_file } from "https://cdn.jsdelivr.net/npm/@gradio/client@2.7.1/dist/browser.js";
 
 // Catálogo de modelos (Spaces públicos do Hugging Face). "aceita": o que o modelo recebe.
@@ -158,7 +161,7 @@ const scroll = () => chat.scrollTo({ top: chat.scrollHeight, behavior: "smooth" 
 const objUrl = (blob) => { const u = URL.createObjectURL(blob); urls.add(u); return u; };
 const isVideo = (blob) => blob.type.startsWith("video/");
 
-function bubble(cls, { text, img, video, actions } = {}) {
+function bubble(cls, { text, img, video, actions, time } = {}) {
   const el = document.createElement("div");
   el.className = "msg " + cls;
   if (img) { const i = document.createElement("img"); i.src = img; i.alt = ""; el.append(i); }
@@ -169,7 +172,7 @@ function bubble(cls, { text, img, video, actions } = {}) {
     for (const [label, fn] of actions) { const b = document.createElement("button"); b.textContent = label; b.onclick = fn; a.append(b); }
     el.append(a);
   }
-  const tm = document.createElement("div"); tm.className = "time"; tm.textContent = now(); el.append(tm);
+  const tm = document.createElement("div"); tm.className = "time"; tm.textContent = time || now(); el.append(tm);
   chat.append(el); scroll();
   return el;
 }
@@ -338,18 +341,78 @@ function route(hasImage) {
   return { m: model };
 }
 
+// ---------- Histórico opcional (só grava se o usuário ligar) ----------
+const HIST_KEY = "uxia_keep_history";
+let keepHistory = false;
+try { keepHistory = localStorage.getItem(HIST_KEY) === "1"; } catch {}
+let log = [];
+const subText = () => keepHistory ? "online · conversa salva neste aparelho" : "online · nada é salvo neste aparelho";
+
+function idb() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open("uxia", 1);
+    r.onupgradeneeded = () => r.result.createObjectStore("chat");
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+async function saveLog() {
+  try {
+    const db = await idb();
+    await new Promise((res, rej) => { const tx = db.transaction("chat", "readwrite"); tx.objectStore("chat").put(log, "log"); tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+    db.close();
+  } catch {}
+}
+async function loadLog() {
+  try {
+    const db = await idb();
+    const v = await new Promise((res, rej) => { const r = db.transaction("chat").objectStore("chat").get("log"); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+    db.close();
+    return Array.isArray(v) ? v : [];
+  } catch { return []; }
+}
+function wipeLog() { try { indexedDB.deleteDatabase("uxia"); } catch {} }
+function record(entry) {
+  log.push({ ...entry, time: now() });
+  if (log.length > 200) log = log.slice(-200);
+  if (keepHistory) saveLog();
+}
+
+function showResult(r, time) {
+  const m = MODELS.find((x) => x.id === r.modelId) || { id: r.modelId, nome: r.nome };
+  const url = r.blob ? objUrl(r.blob) : r.remoteUrl;
+  const ext = ((r.blob?.type || "").split("/")[1] || (r.video ? "mp4" : "webp")).replace("jpeg", "jpg").replace("quicktime", "mov");
+  const actions = [["Salvar", () => { const a = document.createElement("a"); a.href = url; a.download = `${m.id}-${r.seed ?? Date.now()}.${ext}`; a.click(); }]];
+  if (!r.video && r.blob) {
+    actions.push(["Editar", () => { setModel(MODELS.find((x) => x.id === "flux-kontext")); setAttach(r.blob); }]);
+    actions.push(["Animar", () => { setModel(MODELS.find((x) => x.id === "ltx")); setAttach(r.blob); }]);
+  }
+  bubble("bot", { [r.video ? "video" : "img"]: url, text: r.info, actions, time });
+}
+
+function replay(entries) {
+  for (const e of entries) {
+    if (e.t === "me") bubble("me", { text: e.text, img: e.blob ? objUrl(e.blob) : null, time: e.time });
+    else if (e.t === "err") bubble("bot err", { text: e.text, time: e.time });
+    else if (e.t === "sys") sys(e.text);
+    else if (e.t === "res") showResult(e, e.time);
+  }
+}
+
 async function send() {
   const prompt = $("text").value.trim();
   if (!prompt) return;
   const input = attached;
   bubble("me", { text: prompt, img: input ? objUrl(input) : null });
+  record({ t: "me", text: prompt, blob: input || null });
+  const fail = (text) => { bubble("bot err", { text }); record({ t: "err", text }); };
   $("text").value = ""; autosize(); setAttach(null);
 
   const why = blocked(prompt, !!input);
-  if (why) { bubble("bot err", { text: why }); return; }
+  if (why) { fail(why); return; }
   const r = route(!!input);
-  if (r.err) { bubble("bot err", { text: r.err }); return; }
-  if (r.note) sys(r.note);
+  if (r.err) { fail(r.err); return; }
+  if (r.note) { sys(r.note); record({ t: "sys", text: r.note }); }
   const m = r.m;
 
   $("send").disabled = true;
@@ -359,29 +422,24 @@ async function send() {
   try {
     const { blob, remoteUrl, video: remoteVideo, seed } = await generate(m, prompt, input);
     dots.remove();
-    const url = blob ? objUrl(blob) : remoteUrl;
-    const video = blob ? isVideo(blob) : remoteVideo;
-    const ext = ((blob?.type || "").split("/")[1] || (video ? "mp4" : "webp")).replace("jpeg", "jpg").replace("quicktime", "mov");
     const secs = ((performance.now() - t0) / 1000).toFixed(0);
-    const actions = [["Salvar", () => { const a = document.createElement("a"); a.href = url; a.download = `${m.id}-${seed ?? Date.now()}.${ext}`; a.click(); }]];
-    if (!video && blob) {
-      actions.push(["Editar", () => { setModel(MODELS.find((x) => x.id === "flux-kontext")); setAttach(blob); }]);
-      actions.push(["Animar", () => { setModel(MODELS.find((x) => x.id === "ltx")); setAttach(blob); }]);
-    }
-    bubble("bot", { [video ? "video" : "img"]: url, text: `${m.nome} · ${secs}s${seed != null ? " · seed " + seed : ""}`, actions });
+    const res = { t: "res", modelId: m.id, nome: m.nome, blob: blob || null, remoteUrl: blob ? null : remoteUrl,
+      video: blob ? isVideo(blob) : remoteVideo, seed, info: `${m.nome} · ${secs}s${seed != null ? " · seed " + seed : ""}` };
+    showResult(res);
+    record(res);
   } catch (e) {
     dots.remove();
     const msg = String(e?.message || e);
-    bubble("bot err", { text: /quota|exceeded|ZeroGPU/i.test(msg)
+    fail(/quota|exceeded|ZeroGPU/i.test(msg)
       ? "Cota gratuita esgotada por agora. Tente mais tarde ou coloque um token do Hugging Face em Ajustes (⋮)."
       : /metadata could not be loaded|could not resolve|not found|paused|sleeping|runtime error/i.test(msg)
         ? `O Space de ${m.nome} (${m.space}) está fora do ar, pausado ou mudou de endereço. Escolha outro modelo ou informe outro Space no seletor.`
         : /failed to fetch|networkerror|load failed/i.test(msg)
           ? `Sem resposta do servidor de ${m.nome} ao ${e.etapa || "conectar"}. O Space pode estar pausado, lotado ou fora do ar. Para descobrir o motivo: ⋮ → 🔍 Testar conexão.\n(${VERSAO} · detalhe: ${msg})`
-          : `Não consegui gerar com ${m.nome}: ${msg}` });
+          : `Não consegui gerar com ${m.nome}: ${msg}`);
   } finally {
     $("send").disabled = false;
-    $("sub").textContent = "online · nada é salvo neste aparelho";
+    $("sub").textContent = subText();
   }
 }
 
@@ -407,7 +465,19 @@ try {
   const saved = localStorage.getItem(TOKEN_KEY);
   if (saved) { $("token").value = saved; $("remember").checked = true; }
 } catch {}
-$("okset").onclick = () => { saveTokenPref(); $("settings").close(); };
+$("keephist").checked = keepHistory;
+$("okset").onclick = () => {
+  saveTokenPref();
+  const want = $("keephist").checked;
+  if (want !== keepHistory) {
+    keepHistory = want;
+    try { want ? localStorage.setItem(HIST_KEY, "1") : localStorage.removeItem(HIST_KEY); } catch {}
+    if (want) { saveLog(); sys("A conversa agora fica salva neste aparelho. A lixeira apaga tudo."); }
+    else { wipeLog(); sys("Histórico apagado do aparelho. A conversa volta a ficar só na memória."); }
+    $("sub").textContent = subText();
+  }
+  $("settings").close();
+};
 
 // Diagnóstico: testa cada etapa da conexão com o Space e mostra o resultado no chat.
 async function probe(url, opts = {}) {
@@ -450,15 +520,19 @@ $("diag").onclick = async () => {
 };
 $("clear").onclick = () => {
   for (const u of urls) URL.revokeObjectURL(u);
-  urls.clear(); chat.replaceChildren(); setAttach(null); hello();
+  urls.clear(); chat.replaceChildren(); setAttach(null);
+  log = []; if (keepHistory) saveLog();
+  hello();
 };
 
 function hello() {
-  sys(`UXIA ${VERSAO} · conversa só na memória: ao fechar, tudo some. Use “Salvar” para baixar.${$("remember").checked ? " Token salvo neste aparelho." : ""}`);
+  sys(`UXIA ${VERSAO} · ${keepHistory ? "conversa salva neste aparelho (a lixeira apaga)" : "conversa só na memória: ao fechar, tudo some"}. Use “Salvar” para baixar.${$("remember").checked ? " Token salvo neste aparelho." : ""}`);
   bubble("bot", { text: "Oi! Toque no nome do modelo lá em cima para escolher (imagem ou vídeo). Escreva o que quer criar — ou anexe uma imagem pelo clipe e diga o que fazer com ela." });
 }
 setModel(model, false);
+$("sub").textContent = subText();
 hello();
+if (keepHistory) loadLog().then((saved) => { log = saved; replay(saved); });
 if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
 </script>
 </body>
