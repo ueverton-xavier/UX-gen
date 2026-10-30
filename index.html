@@ -144,7 +144,7 @@
 </dialog>
 
 <script type="module">
-const VERSAO = "v18";
+const VERSAO = "v19";
 import { Client, handle_file } from "https://cdn.jsdelivr.net/npm/@gradio/client@2.7.1/dist/browser.js";
 
 // Catálogo de modelos (Spaces públicos do Hugging Face). "aceita": o que o modelo recebe.
@@ -157,6 +157,7 @@ const MODELS = [
   { id: "ltx",          nome: "LTX-Video",        tipo: "vídeo",  aceita: "ambos",  space: "Lightricks/ltx-video-distilled",      desc: "Vídeo rápido a partir de texto ou imagem" },
   { id: "poll-flux",    nome: "FLUX (Pollinations)", tipo: "imagem", aceita: "texto", prov: "pollinations", space: "pollinations.ai", desc: "Outro provedor, cota própria (chave opcional)" },
   { id: "tog-schnell",  nome: "FLUX schnell (Together)", tipo: "imagem", aceita: "texto", prov: "together", space: "api.together.xyz", desc: "Outro provedor, endpoint grátis (precisa chave)" },
+  { id: "civ-wan",      nome: "Wan vídeo (Civitai)", tipo: "vídeo", aceita: "ambos", prov: "civitai-video", space: "orchestration.civitai.com", desc: "Vídeo por texto ou imagem, fora da cota do Hugging Face (chave Civitai, usa Buzz)" },
   { id: "civitai",      nome: "Civitai (checkpoint)", tipo: "imagem", aceita: "texto", prov: "civitai", space: "orchestration.civitai.com", desc: "Modelos da comunidade Civitai pelo AIR (precisa chave, usa Buzz)" },
 ];
 // Ordem de troca automática quando a cota do Hugging Face acaba (só texto → imagem).
@@ -429,7 +430,7 @@ async function genTogether(prompt) {
 // Sem AIR: passo "imageGen" com engine flux (formato atual da doc). Com AIR: passo "textToImage" (aceita checkpoint
 // da comunidade); se a API recusar esse formato, cai para o imageGen.
 const CIVITAI = "https://orchestration.civitai.com";
-async function civitaiRun(stepObj, headers) {
+async function civitaiRun(stepObj, headers, maxMin = 5) {
   const r = await fetch(`${CIVITAI}/v2/consumer/workflows?wait=60`, { method: "POST", headers, body: JSON.stringify({ steps: [stepObj] }) });
   let wf = await r.json().catch(() => ({}));
   if (!r.ok && r.status !== 202) {
@@ -439,7 +440,7 @@ async function civitaiRun(stepObj, headers) {
   const t0 = Date.now();
   const fileOf = (w) => (w?.steps || []).flatMap((st) => [...(st?.output?.blobs || []), ...(st?.output?.images || [])]).find((b) => b?.url);
   while (!fileOf(wf) && !["failed", "expired", "canceled"].includes(wf?.status)) {
-    if (Date.now() - t0 > 5 * 60 * 1000) throw new Error("o Civitai demorou mais de 5 minutos");
+    if (Date.now() - t0 > maxMin * 60 * 1000) throw new Error(`o Civitai demorou mais de ${maxMin} minutos`);
     if (!wf?.id) throw new Error("o Civitai não devolveu o id do pedido");
     await new Promise((ok) => setTimeout(ok, 3000));
     const g = await fetch(`${CIVITAI}/v2/consumer/workflows/${wf.id}`, { headers, cache: "no-store" });
@@ -490,7 +491,40 @@ async function genCivitai(prompt) {
   return { ...(await blobOrRemote(url)), seed: seedTxt ? Number(seedTxt) : undefined };
 }
 
+// Reduz a imagem (lado maior 1024) e devolve data URL JPEG para enviar ao Civitai.
+async function toDataUrl(blob, max = 1024) {
+  const bmp = await createImageBitmap(blob);
+  const k = Math.min(1, max / Math.max(bmp.width, bmp.height));
+  const c = document.createElement("canvas");
+  c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+  c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
+  return c.toDataURL("image/jpeg", 0.9);
+}
+
+// Vídeo pelo Civitai: passo "videoGen" com engine "wan" (engine listado pela própria API). Tenta variações de campo.
+async function genCivitaiVideo(prompt, inputBlob) {
+  const key = $("civkey").value.trim();
+  if (!key) throw new Error("coloque a chave do Civitai em Ajustes (⋮)");
+  const headers = { Authorization: `Bearer ${key}`, "Content-Type": "application/json" };
+  const img = inputBlob ? await toDataUrl(inputBlob) : null;
+  const base = { engine: "wan", prompt };
+  const CANDIDATOS = img
+    ? [{ ...base, images: [img] }, { ...base, sourceImage: img }, { ...base, imageUrl: img }, { ...base, image: img }]
+    : [{ ...base }, { ...base, model: "2.2" }];
+  let last;
+  for (const input of CANDIDATOS) {
+    try {
+      const url = await civitaiRun({ $type: "videoGen", input }, headers, 10);
+      const r = await blobOrRemote(url);
+      if (r.blob && !r.blob.type.startsWith("video/")) r.blob = new Blob([r.blob], { type: "video/mp4" });
+      return { ...r, video: true };
+    } catch (e) { if (e.status !== 400) throw e; last = e; }
+  }
+  throw last;
+}
+
 async function generate(m, prompt, inputBlob) {
+  if (m.prov === "civitai-video") return step("Civitai vídeo", () => genCivitaiVideo(prompt, inputBlob));
   if (m.prov === "civitai") return step("Civitai", () => genCivitai(prompt));
   if (m.prov === "pollinations") return step("Pollinations", () => genPollinations(prompt));
   if (m.prov === "together") return step("Together", () => genTogether(prompt));
@@ -527,10 +561,15 @@ function blocked(prompt, hasImage, fictionalImage) {
 }
 
 // Escolhe o modelo certo para o que foi enviado (ex.: imagem anexada num modelo só de texto → Kontext).
-function route(hasImage) {
+const VIDEO_INTENT = /(?<![\p{L}])(v[ií]deos?|anim\p{L}*|movimento|dan[cç]\p{L}*|clip|video|animate\p{L}*|motion)(?![\p{L}])/iu;
+function route(hasImage, prompt = "") {
   if (hasImage && model.aceita === "texto") {
-    if (model.tipo === "imagem") return { m: MODELS.find((x) => x.id === "flux-kontext"), note: "Imagem anexada → usando FLUX.1 Kontext para editar." };
-    return { m: MODELS.find((x) => x.id === "ltx"), note: `${model.nome} não aceita imagem → usando LTX-Video.` };
+    const civ = !!$("civkey").value.trim();
+    if (model.tipo === "vídeo" || VIDEO_INTENT.test(prompt)) {
+      const v = MODELS.find((x) => x.id === (civ ? "civ-wan" : "ltx"));
+      return { m: v, note: `Imagem anexada + vídeo → usando ${v.nome}${civ ? "" : " (Hugging Face; com chave Civitai usaria Wan vídeo, fora da cota)"}.` };
+    }
+    return { m: MODELS.find((x) => x.id === "flux-kontext"), note: "Imagem anexada → usando FLUX.1 Kontext (Hugging Face) para editar." };
   }
   if (!hasImage && model.aceita === "imagem") return { err: `${model.nome} edita imagens: toque no clipe e anexe uma.` };
   return { m: model };
@@ -609,7 +648,7 @@ async function send() {
   const fictionalInput = !!input && FICTIONAL.has(input);
   const why = blocked(prompt, !!input, fictionalInput);
   if (why) { fail(why); return; }
-  const r = route(!!input);
+  const r = route(!!input, prompt);
   if (r.err) { fail(r.err); return; }
   if (r.note) { sys(r.note); record({ t: "sys", text: r.note }); }
   let m = r.m;
@@ -633,6 +672,7 @@ async function send() {
         const alt = MODELS.find((x) => x.id === id);
         if (alt.prov === "together" && !$("togkey").value.trim()) continue;
         if (alt.prov === "civitai" && !$("civkey").value.trim()) continue;
+        if (alt.prov === "civitai-video") continue;
         sys(`${prev} indisponível (cota/conexão) → tentando ${alt.nome}…`);
         prev = alt.nome;
         $("sub").textContent = `${alt.nome} gerando…`;
@@ -655,13 +695,13 @@ async function send() {
     const msg = String(e?.message || e);
     fail(/quota|exceeded|ZeroGPU/i.test(msg)
       ? ($("token").value.trim()
-          ? `Cota de GPU da sua conta Hugging Face esgotada por agora. Ela volta sozinha com o tempo; FLUX.1 [schnell] gasta bem menos. O Hugging Face PRO dá várias vezes mais cota.\n(Hugging Face: ${msg.replace(/^gerar \([^)]*\): /, "").slice(0, 220)})`
-          : `Cota gratuita esgotada por agora. Coloque seu token do Hugging Face em Ajustes (⋮) para usar a cota da sua conta, ou tente mais tarde.\n(Hugging Face: ${msg.replace(/^gerar \([^)]*\): /, "").slice(0, 220)})`)
+          ? `${m.nome} roda no Hugging Face, e a cota de GPU da sua conta lá acabou por agora.${$("civkey").value.trim() ? " Para vídeo sem essa cota, escolha “Wan vídeo (Civitai)”." : ""} Ela volta sozinha com o tempo; FLUX.1 [schnell] gasta bem menos. O Hugging Face PRO dá várias vezes mais cota.\n(Hugging Face: ${msg.replace(/^gerar \([^)]*\): /, "").slice(0, 220)})`
+          : `${m.nome} roda no Hugging Face, e a cota gratuita acabou por agora. Coloque seu token do Hugging Face em Ajustes (⋮) para usar a cota da sua conta, ou tente mais tarde.\n(Hugging Face: ${msg.replace(/^gerar \([^)]*\): /, "").slice(0, 220)})`)
       : /metadata could not be loaded|could not resolve|not found|paused|sleeping|runtime error/i.test(msg)
         ? `O Space de ${m.nome} (${m.space}) está fora do ar, pausado ou mudou de endereço. Escolha outro modelo ou informe outro Space no seletor.`
         : /failed to fetch|networkerror|load failed/i.test(msg)
           ? `Sem resposta do servidor de ${m.nome} ao ${e.etapa || "conectar"}. O Space pode estar pausado, lotado ou fora do ar. Para descobrir o motivo: ⋮ → 🔍 Testar conexão.\n(${VERSAO} · detalhe: ${msg})`
-          : `Não consegui gerar com ${m.nome}${/^(Pollinations|Together|Civitai):/.test(msg) ? " nem com os outros provedores" : ""}: ${msg}`);
+          : `Não consegui gerar com ${m.nome}${/^(Pollinations|Together|Civitai|Civitai vídeo):/.test(msg) ? " nem com os outros provedores" : ""}: ${msg}`);
   } finally {
     $("send").disabled = false;
     $("sub").textContent = subText();
