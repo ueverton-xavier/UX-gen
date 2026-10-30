@@ -125,6 +125,10 @@
   <input id="pollkey" type="password" autocomplete="off" placeholder="pk_... ou sk_...">
   <label for="togkey">Chave Together AI (api.together.ai)</label>
   <input id="togkey" type="password" autocomplete="off" placeholder="chave da Together">
+  <label for="civkey">Chave Civitai (civitai.com → Account → API Keys)</label>
+  <input id="civkey" type="password" autocomplete="off" placeholder="chave do Civitai">
+  <label for="civair">Modelo Civitai (opcional: AIR, na página do modelo)</label>
+  <input id="civair" autocomplete="off" placeholder="vazio = FLUX do Civitai · ex.: urn:air:sdxl:checkpoint:civitai:…">
   <label style="display:flex;align-items:center;gap:8px;margin-top:10px;color:var(--txt)">
     <input id="autofb" type="checkbox" checked style="width:auto"> Trocar de provedor sozinho quando a cota acabar
   </label>
@@ -140,7 +144,7 @@
 </dialog>
 
 <script type="module">
-const VERSAO = "v16";
+const VERSAO = "v17";
 import { Client, handle_file } from "https://cdn.jsdelivr.net/npm/@gradio/client@2.7.1/dist/browser.js";
 
 // Catálogo de modelos (Spaces públicos do Hugging Face). "aceita": o que o modelo recebe.
@@ -153,9 +157,10 @@ const MODELS = [
   { id: "ltx",          nome: "LTX-Video",        tipo: "vídeo",  aceita: "ambos",  space: "Lightricks/ltx-video-distilled",      desc: "Vídeo rápido a partir de texto ou imagem" },
   { id: "poll-flux",    nome: "FLUX (Pollinations)", tipo: "imagem", aceita: "texto", prov: "pollinations", space: "pollinations.ai", desc: "Outro provedor, cota própria (chave opcional)" },
   { id: "tog-schnell",  nome: "FLUX schnell (Together)", tipo: "imagem", aceita: "texto", prov: "together", space: "api.together.xyz", desc: "Outro provedor, endpoint grátis (precisa chave)" },
+  { id: "civitai",      nome: "Civitai (checkpoint)", tipo: "imagem", aceita: "texto", prov: "civitai", space: "orchestration.civitai.com", desc: "Modelos da comunidade Civitai pelo AIR (precisa chave, usa Buzz)" },
 ];
 // Ordem de troca automática quando a cota do Hugging Face acaba (só texto → imagem).
-const FALLBACK = ["poll-flux", "tog-schnell"];
+const FALLBACK = ["poll-flux", "tog-schnell", "civitai"];
 let model = MODELS[0];
 
 // Travas exigidas pelas licenças e pela lei:
@@ -420,7 +425,53 @@ async function genTogether(prompt) {
   throw new Error("a Together respondeu sem imagem");
 }
 
+// Civitai Orchestration (developer.civitai.com): POST /v2/consumer/workflows e acompanha até terminar.
+// Sem AIR: passo "imageGen" com engine flux (formato atual da doc). Com AIR: passo "textToImage" (aceita checkpoint
+// da comunidade); se a API recusar esse formato, cai para o imageGen.
+const CIVITAI = "https://orchestration.civitai.com";
+async function civitaiRun(stepObj, headers) {
+  const r = await fetch(`${CIVITAI}/v2/consumer/workflows?wait=60`, { method: "POST", headers, body: JSON.stringify({ steps: [stepObj] }) });
+  let wf = await r.json().catch(() => ({}));
+  if (!r.ok && r.status !== 202) { const e = new Error(`HTTP ${r.status} ${JSON.stringify(wf).slice(0, 240)}`); e.status = r.status; throw e; }
+  const t0 = Date.now();
+  const fileOf = (w) => (w?.steps || []).flatMap((st) => [...(st?.output?.blobs || []), ...(st?.output?.images || [])]).find((b) => b?.url);
+  while (!fileOf(wf) && !["failed", "expired", "canceled"].includes(wf?.status)) {
+    if (Date.now() - t0 > 5 * 60 * 1000) throw new Error("o Civitai demorou mais de 5 minutos");
+    if (!wf?.id) throw new Error("o Civitai não devolveu o id do pedido");
+    await new Promise((ok) => setTimeout(ok, 3000));
+    const g = await fetch(`${CIVITAI}/v2/consumer/workflows/${wf.id}`, { headers, cache: "no-store" });
+    wf = await g.json().catch(() => ({}));
+    if (!g.ok) throw new Error(`HTTP ${g.status} ${JSON.stringify(wf).slice(0, 200)}`);
+  }
+  const f = fileOf(wf);
+  if (!f) throw new Error(`o Civitai terminou como "${wf?.status}" sem imagem`);
+  return f.url;
+}
+async function genCivitai(prompt) {
+  const key = $("civkey").value.trim();
+  if (!key) throw new Error("coloque a chave do Civitai em Ajustes (⋮)");
+  const air = $("civair").value.trim();
+  const [w, h] = $("size").value.split("x").map(Number);
+  const seedTxt = $("seed").value.trim();
+  const stepsTxt = $("steps").value.trim();
+  const headers = { Authorization: `Bearer ${key}`, "Content-Type": "application/json" };
+  const imageGen = { $type: "imageGen", input: { engine: "flux", prompt, width: w, height: h } };
+  let url;
+  if (air) {
+    const flux = /:flux/i.test(air);
+    const input = { model: air, prompt, width: w, height: h, quantity: 1, steps: Number(stepsTxt) || (flux ? 28 : 30), cfgScale: flux ? 3.5 : 6 };
+    if (!flux) input.negativePrompt = "lowres, bad anatomy, bad hands, deformed, blurry, watermark, text";
+    if (seedTxt) input.seed = Number(seedTxt);
+    try { url = await civitaiRun({ $type: "textToImage", input }, headers); }
+    catch (e) { if (e.status !== 400) throw e; sys("Civitai recusou o formato com AIR → usando o FLUX padrão do Civitai."); url = await civitaiRun(imageGen, headers); }
+  } else {
+    url = await civitaiRun(imageGen, headers);
+  }
+  return { ...(await blobOrRemote(url)), seed: seedTxt ? Number(seedTxt) : undefined };
+}
+
 async function generate(m, prompt, inputBlob) {
+  if (m.prov === "civitai") return step("Civitai", () => genCivitai(prompt));
   if (m.prov === "pollinations") return step("Pollinations", () => genPollinations(prompt));
   if (m.prov === "together") return step("Together", () => genTogether(prompt));
   const client = await step("conectar ao Space", () => getClient(m.space));
@@ -561,6 +612,7 @@ async function send() {
       for (const id of FALLBACK) {
         const alt = MODELS.find((x) => x.id === id);
         if (alt.prov === "together" && !$("togkey").value.trim()) continue;
+        if (alt.prov === "civitai" && !$("civkey").value.trim()) continue;
         sys(`${prev} indisponível (cota/conexão) → tentando ${alt.nome}…`);
         prev = alt.nome;
         $("sub").textContent = `${alt.nome} gerando…`;
@@ -589,7 +641,7 @@ async function send() {
         ? `O Space de ${m.nome} (${m.space}) está fora do ar, pausado ou mudou de endereço. Escolha outro modelo ou informe outro Space no seletor.`
         : /failed to fetch|networkerror|load failed/i.test(msg)
           ? `Sem resposta do servidor de ${m.nome} ao ${e.etapa || "conectar"}. O Space pode estar pausado, lotado ou fora do ar. Para descobrir o motivo: ⋮ → 🔍 Testar conexão.\n(${VERSAO} · detalhe: ${msg})`
-          : `Não consegui gerar com ${m.nome}${/^(Pollinations|Together):/.test(msg) ? " nem com os outros provedores" : ""}: ${msg}`);
+          : `Não consegui gerar com ${m.nome}${/^(Pollinations|Together|Civitai):/.test(msg) ? " nem com os outros provedores" : ""}: ${msg}`);
   } finally {
     $("send").disabled = false;
     $("sub").textContent = subText();
@@ -612,7 +664,7 @@ $("unattach").onclick = () => setAttach(null);
 $("gear").onclick = () => $("settings").showModal();
 // Token salvo só se o usuário marcar "Lembrar" (única gravação do app no aparelho).
 const TOKEN_KEY = "uxia_hf_token";
-const KEY_FIELDS = { token: TOKEN_KEY, pollkey: "uxia_poll_key", togkey: "uxia_together_key" };
+const KEY_FIELDS = { token: TOKEN_KEY, pollkey: "uxia_poll_key", togkey: "uxia_together_key", civkey: "uxia_civitai_key", civair: "uxia_civitai_air" };
 function saveTokenPref() {
   for (const [id, key] of Object.entries(KEY_FIELDS)) {
     const v = $(id).value.trim();
