@@ -119,10 +119,11 @@
   <label for="token">Token do Hugging Face (opcional, aumenta a cota; fica só na memória)</label>
   <input id="token" type="password" autocomplete="off" placeholder="hf_...">
   <button class="ok" id="okset">Pronto</button>
+  <button class="ok" id="diag" style="background:transparent;color:var(--acc);border:1px solid var(--acc)">Testar conexão do modelo atual</button>
 </dialog>
 
 <script type="module">
-import { Client, handle_file } from "https://cdn.jsdelivr.net/npm/@gradio/client@1.8.0/+esm";
+import { Client, handle_file } from "https://cdn.jsdelivr.net/npm/@gradio/client@2.7.1/dist/browser.js";
 
 // Catálogo de modelos (Spaces públicos do Hugging Face). "aceita": o que o modelo recebe.
 const MODELS = [
@@ -222,7 +223,8 @@ $("okpick").onclick = () => {
 async function getClient(space) {
   const token = $("token").value.trim();
   const key = space + (token ? ":t" : "");
-  if (!clients[key]) clients[key] = await Client.connect(space, token ? { hf_token: token } : {});
+  // record_history: false — a biblioteca guardaria o histórico de prompts no navegador.
+  if (!clients[key]) clients[key] = await Client.connect(space, { record_history: false, ...(token ? { token } : {}) });
   return clients[key];
 }
 
@@ -388,6 +390,46 @@ $("file").onchange = () => { const f = $("file").files[0]; $("file").value = "";
 $("unattach").onclick = () => setAttach(null);
 $("gear").onclick = () => $("settings").showModal();
 $("okset").onclick = () => $("settings").close();
+
+// Diagnóstico: testa cada etapa da conexão com o Space e mostra o resultado no chat.
+async function probe(url, opts = {}) {
+  const t0 = performance.now();
+  try {
+    const r = await fetch(url, { cache: "no-store", ...opts });
+    let body = "";
+    try { body = (await r.text()).slice(0, 300); } catch {}
+    return { ok: r.ok, status: r.status, body, ms: Math.round(performance.now() - t0) };
+  } catch (e) {
+    return { ok: false, status: "ERRO", body: String(e?.message || e), ms: Math.round(performance.now() - t0) };
+  }
+}
+$("diag").onclick = async () => {
+  $("settings").close();
+  const sp = model.space;
+  const token = $("token").value.trim();
+  const auth = token ? { headers: { Authorization: `Bearer ${token}` } } : {};
+  sys(`Testando conexão com ${sp}…`);
+  const lines = [`Diagnóstico de ${sp} (${navigator.onLine ? "online" : "offline"}, token: ${token ? "sim" : "não"})`];
+  const info = await probe(`https://huggingface.co/api/spaces/${sp}`, auth);
+  let stage = "?", sdk = "?";
+  try { const j = await (await fetch(`https://huggingface.co/api/spaces/${sp}`, { cache: "no-store", ...auth })).json(); stage = j?.runtime?.stage ?? "?"; sdk = `${j?.sdk ?? "?"} ${j?.sdkVersion ?? ""}`.trim(); } catch {}
+  lines.push(`1. Dados do Space: ${info.status} (${info.ms}ms) · estado: ${stage} · sdk: ${sdk}`);
+  const host = await probe(`https://huggingface.co/api/spaces/${sp}/host`, auth);
+  let h = "";
+  try { h = JSON.parse(host.body).host || ""; } catch {}
+  lines.push(`2. Endereço: ${host.status} (${host.ms}ms) ${h || host.body.slice(0, 120)}`);
+  if (h) {
+    const c1 = await probe(`${h}/config`);
+    lines.push(`3. Config sem credenciais: ${c1.status} (${c1.ms}ms) ${c1.ok ? "" : c1.body.slice(0, 120)}`);
+    const c2 = await probe(`${h}/config`, { credentials: "include", ...auth });
+    lines.push(`4. Config com credenciais: ${c2.status} (${c2.ms}ms) ${c2.ok ? "" : c2.body.slice(0, 120)}`);
+    const i1 = await probe(`${h}/gradio_api/info`);
+    lines.push(`5. API (gradio_api/info): ${i1.status} (${i1.ms}ms)`);
+  }
+  try { await getClient(sp); lines.push("6. Conexão pela biblioteca: OK"); }
+  catch (e) { lines.push(`6. Conexão pela biblioteca: ${String(e?.message || e).slice(0, 160)}`); }
+  bubble("bot", { text: lines.join("\n") });
+};
 $("clear").onclick = () => {
   for (const u of urls) URL.revokeObjectURL(u);
   urls.clear(); chat.replaceChildren(); setAttach(null); hello();
