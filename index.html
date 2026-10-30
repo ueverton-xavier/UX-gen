@@ -119,10 +119,11 @@
   <label for="token">Token do Hugging Face (opcional, aumenta a cota; fica só na memória)</label>
   <input id="token" type="password" autocomplete="off" placeholder="hf_...">
   <button class="ok" id="okset">Pronto</button>
-  <button class="ok" id="diag" style="background:transparent;color:var(--acc);border:1px solid var(--acc)">Testar conexão do modelo atual</button>
+  <button class="ok" id="diag" style="background:transparent;color:var(--acc);border:1px solid var(--acc)">🔍 Testar conexão do modelo atual</button>
 </dialog>
 
 <script type="module">
+const VERSAO = "v7";
 import { Client, handle_file } from "https://cdn.jsdelivr.net/npm/@gradio/client@2.7.1/dist/browser.js";
 
 // Catálogo de modelos (Spaces públicos do Hugging Face). "aceita": o que o modelo recebe.
@@ -372,7 +373,7 @@ async function send() {
       : /metadata could not be loaded|could not resolve|not found|paused|sleeping|runtime error/i.test(msg)
         ? `O Space de ${m.nome} (${m.space}) está fora do ar, pausado ou mudou de endereço. Escolha outro modelo ou informe outro Space no seletor.`
         : /failed to fetch|networkerror|load failed/i.test(msg)
-          ? `Sem resposta do servidor de ${m.nome} ao ${e.etapa || "conectar"}. O Space pode estar pausado, lotado ou fora do ar. Tente FLUX.1 [schnell] ou outro modelo pelo seletor lá em cima.\n(detalhe: ${msg})`
+          ? `Sem resposta do servidor de ${m.nome} ao ${e.etapa || "conectar"}. O Space pode estar pausado, lotado ou fora do ar. Para descobrir o motivo: ⋮ → 🔍 Testar conexão.\n(${VERSAO} · detalhe: ${msg})`
           : `Não consegui gerar com ${m.nome}: ${msg}` });
   } finally {
     $("send").disabled = false;
@@ -436,7 +437,7 @@ $("clear").onclick = () => {
 };
 
 function hello() {
-  sys("Conversa só na memória: ao fechar, tudo some. Use “Salvar” para baixar.");
+  sys(`UXIA ${VERSAO} · conversa só na memória: ao fechar, tudo some. Use “Salvar” para baixar.`);
   bubble("bot", { text: "Oi! Toque no nome do modelo lá em cima para escolher (imagem ou vídeo). Escreva o que quer criar — ou anexe uma imagem pelo clipe e diga o que fazer com ela." });
 }
 setModel(model, false);
