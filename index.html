@@ -129,6 +129,11 @@
   <input id="civkey" type="password" autocomplete="off" placeholder="chave do Civitai">
   <label for="civair">Modelo Civitai (opcional: AIR, na página do modelo)</label>
   <input id="civair" autocomplete="off" placeholder="vazio = FLUX do Civitai · ex.: urn:air:sdxl:checkpoint:civitai:…">
+  <label for="civloras">LoRAs (uma por linha: AIR e força opcional, ex.: urn:air:sdxl:lora:civitai:123@456 0.8)</label>
+  <textarea id="civloras" rows="3" autocomplete="off" style="width:100%;background:var(--input);color:var(--txt);border:0;border-radius:8px;padding:10px;font:inherit" placeholder="urn:air:sdxl:lora:civitai:…  0.7"></textarea>
+  <label style="display:flex;align-items:center;gap:8px;margin-top:10px;color:var(--txt)">
+    <input id="hires" type="checkbox" checked style="width:auto"> Alta resolução SDXL (832×1216 retrato · 1216×832 paisagem)
+  </label>
   <label style="display:flex;align-items:center;gap:8px;margin-top:10px;color:var(--txt)">
     <input id="autofb" type="checkbox" checked style="width:auto"> Trocar de provedor sozinho quando a cota acabar
   </label>
@@ -144,7 +149,7 @@
 </dialog>
 
 <script type="module">
-const VERSAO = "v19";
+const VERSAO = "v20";
 import { Client, handle_file } from "https://cdn.jsdelivr.net/npm/@gradio/client@2.7.1/dist/browser.js";
 
 // Catálogo de modelos (Spaces públicos do Hugging Face). "aceita": o que o modelo recebe.
@@ -451,6 +456,18 @@ async function civitaiRun(stepObj, headers, maxMin = 5) {
   if (!f) throw new Error(`o Civitai terminou como "${wf?.status}" sem imagem`);
   return f.url;
 }
+// "AIR força" por linha → { AIR: { type: "Lora", strength } } (formato additionalNetworks da API do Civitai).
+function parseLoras(text) {
+  const out = {};
+  for (const line of String(text || "").split(/\n+/)) {
+    const [air, str] = line.trim().split(/\s+/);
+    if (!/^urn:air:/i.test(air || "")) continue;
+    const n = Number(str);
+    out[air] = { type: "Lora", strength: Number.isFinite(n) && str ? n : 0.8 };
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 async function genCivitai(prompt) {
   const key = $("civkey").value.trim();
   if (!key) throw new Error("coloque a chave do Civitai em Ajustes (⋮)");
@@ -478,10 +495,22 @@ async function genCivitai(prompt) {
     throw last;
   };
   let url;
+  const loras = parseLoras($("civloras").value);
+  if (loras && !air) throw new Error("LoRAs precisam de um checkpoint: cole o AIR de um modelo SDXL em Ajustes (⋮)");
   if (air) {
     const flux = /:flux/i.test(air);
-    const input = { model: air, prompt, width: w, height: h, quantity: 1, steps: Number(stepsTxt) || (flux ? 28 : 30), cfgScale: flux ? 3.5 : 6 };
-    if (!flux) input.negativePrompt = "lowres, bad anatomy, bad hands, deformed, blurry, watermark, text";
+    const sdxl = /:(sdxl|pony|illustrious)/i.test(air);
+    // Resoluções nativas do SDXL (melhor anatomia/detalhe que 1024 esticado).
+    let [W, H] = [w, h];
+    if (sdxl && $("hires").checked) [W, H] = w === h ? [1024, 1024] : (h > w ? [832, 1216] : [1216, 832]);
+    const input = { model: air, prompt, width: W, height: H, quantity: 1,
+      steps: Number(stepsTxt) || (flux ? 28 : 30), cfgScale: flux ? 3.5 : 5.5 };
+    if (!flux) {
+      input.scheduler = "dpM2MKarras";
+      input.clipSkip = 2;
+      input.negativePrompt = "lowres, worst quality, bad anatomy, bad hands, extra fingers, missing fingers, deformed, disfigured, mutated, extra limbs, blurry, cartoon, 3d render, watermark, text, signature";
+    }
+    if (loras) input.additionalNetworks = loras;
     if (seedTxt) input.seed = Number(seedTxt);
     try { url = await civitaiRun({ $type: "textToImage", input }, headers); }
     catch (e) { if (e.status !== 400) throw e; sys("Civitai recusou o formato com AIR → usando o FLUX 2 do Civitai."); url = await imageGenRun(); }
@@ -622,7 +651,7 @@ function showResult(r, time) {
   }]];
   if (!r.video && r.blob) {
     actions.push(["Editar", () => { setModel(MODELS.find((x) => x.id === "flux-kontext")); setAttach(r.blob); }]);
-    actions.push(["Animar", () => { setModel(MODELS.find((x) => x.id === "ltx")); setAttach(r.blob); }]);
+    actions.push(["Animar", () => { setModel(MODELS.find((x) => x.id === ($("civkey").value.trim() ? "civ-wan" : "ltx"))); setAttach(r.blob); }]);
   }
   bubble("bot", { [r.video ? "video" : "img"]: url, text: r.info, actions, time });
 }
@@ -724,7 +753,7 @@ $("unattach").onclick = () => setAttach(null);
 $("gear").onclick = () => $("settings").showModal();
 // Token salvo só se o usuário marcar "Lembrar" (única gravação do app no aparelho).
 const TOKEN_KEY = "uxia_hf_token";
-const KEY_FIELDS = { token: TOKEN_KEY, pollkey: "uxia_poll_key", togkey: "uxia_together_key", civkey: "uxia_civitai_key", civair: "uxia_civitai_air" };
+const KEY_FIELDS = { token: TOKEN_KEY, pollkey: "uxia_poll_key", togkey: "uxia_together_key", civkey: "uxia_civitai_key", civair: "uxia_civitai_air", civloras: "uxia_civitai_loras" };
 function saveTokenPref() {
   for (const [id, key] of Object.entries(KEY_FIELDS)) {
     const v = $(id).value.trim();
