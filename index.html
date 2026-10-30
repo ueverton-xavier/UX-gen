@@ -133,7 +133,7 @@
 </dialog>
 
 <script type="module">
-const VERSAO = "v12";
+const VERSAO = "v13";
 import { Client, handle_file } from "https://cdn.jsdelivr.net/npm/@gradio/client@2.7.1/dist/browser.js";
 
 // Catálogo de modelos (Spaces públicos do Hugging Face). "aceita": o que o modelo recebe.
@@ -159,6 +159,9 @@ const $ = (id) => document.getElementById(id);
 const chat = $("chat");
 const urls = new Set();          // object URLs vivos (revogados ao limpar)
 let attached = null;             // Blob anexado aguardando envio
+// Imagens que o próprio app gerou só a partir de texto (ou derivadas delas): sabidamente fictícias.
+// Arquivos enviados pelo clipe nunca entram aqui — marca d'água/assinatura não prova que não é pessoa real.
+const FICTIONAL = new WeakSet();
 const clients = {};
 
 const now = () => new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
@@ -367,10 +370,10 @@ async function generate(m, prompt, inputBlob) {
 }
 
 // ---------- Fluxo da conversa ----------
-function blocked(prompt, hasImage) {
+function blocked(prompt, hasImage, fictionalImage) {
   const sexual = SEXUAL.test(prompt) || UNDRESS.test(prompt);
   if (MINOR.test(prompt) && sexual) return "Não posso gerar conteúdo sexual envolvendo menores.";
-  if (hasImage && sexual) return "Com imagem anexada não gero nudez, despir ou conteúdo sexual — o app não consegue saber se é uma pessoa real (vale também para imagens geradas aqui). Para cenas adultas fictícias, descreva só com texto, sem anexo.";
+  if (hasImage && !fictionalImage && sexual) return "Com foto enviada pelo clipe não gero nudez, despir ou conteúdo sexual — o app não consegue saber se é uma pessoa real (marca d\u2019água ou assinatura de IA não comprova). Para isso: gere a pessoa aqui só com texto e use “Editar” ou “Animar” na imagem gerada — essas são liberadas.";
   return null;
 }
 
@@ -438,7 +441,7 @@ function replay(entries) {
     if (e.t === "me") bubble("me", { text: e.text, img: e.blob ? objUrl(e.blob) : null, time: e.time });
     else if (e.t === "err") bubble("bot err", { text: e.text, time: e.time });
     else if (e.t === "sys") sys(e.text);
-    else if (e.t === "res") showResult(e, e.time);
+    else if (e.t === "res") { if (e.fictional && e.blob) FICTIONAL.add(e.blob); showResult(e, e.time); }
   }
 }
 
@@ -451,7 +454,8 @@ async function send() {
   const fail = (text) => { bubble("bot err", { text }); record({ t: "err", text }); };
   $("text").value = ""; autosize(); setAttach(null);
 
-  const why = blocked(prompt, !!input);
+  const fictionalInput = !!input && FICTIONAL.has(input);
+  const why = blocked(prompt, !!input, fictionalInput);
   if (why) { fail(why); return; }
   const r = route(!!input);
   if (r.err) { fail(r.err); return; }
@@ -466,7 +470,9 @@ async function send() {
     const { blob, remoteUrl, video: remoteVideo, seed } = await generate(m, prompt, input);
     dots.remove();
     const secs = ((performance.now() - t0) / 1000).toFixed(0);
-    const res = { t: "res", modelId: m.id, nome: m.nome, blob: blob || null, remoteUrl: blob ? null : remoteUrl,
+    const fictional = !input || fictionalInput;
+    if (blob && fictional) FICTIONAL.add(blob);
+    const res = { t: "res", fictional, modelId: m.id, nome: m.nome, blob: blob || null, remoteUrl: blob ? null : remoteUrl,
       video: blob ? isVideo(blob) : remoteVideo, seed, info: `${m.nome} · ${secs}s${seed != null ? " · seed " + seed : ""}` };
     showResult(res);
     record(res);
