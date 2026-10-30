@@ -149,7 +149,7 @@
 </dialog>
 
 <script type="module">
-const VERSAO = "v20";
+const VERSAO = "v21";
 import { Client, handle_file } from "https://cdn.jsdelivr.net/npm/@gradio/client@2.7.1/dist/browser.js";
 
 // Catálogo de modelos (Spaces públicos do Hugging Face). "aceita": o que o modelo recebe.
@@ -342,6 +342,15 @@ function buildArgs(params, prompt, imageBlob) {
     else if (/^(num_inference_steps|steps|num_steps|step)$/i.test(n) && stepsTxt && /number|slider/i.test(p.component || "")) args[n] = Number(stepsTxt);
     else if (/^width$/i.test(n) && model.tipo === "imagem") args[n] = w;
     else if (/^height$/i.test(n) && model.tipo === "imagem") args[n] = h;
+  }
+  // Campo de modo (ex.: LTX "mode": text-to-video / image-to-video) conforme há imagem ou não.
+  for (const p of params) {
+    const n = p.parameter_name || "";
+    if (n in args || !/mode|task|tipo/i.test(n)) continue;
+    const opts = choicesOf(p);
+    const want = opts.find((o) => (imageBlob ? /image|img|i2v/i : /text|txt|t2v/i).test(o) && !(imageBlob ? /text/i : /image/i).test(o.replace(/to-?video/i, "")))
+      || opts.find((o) => (imageBlob ? /image|img|i2v/i : /text|txt|t2v/i).test(o));
+    if (want) args[n] = want;
   }
   // Campos de escolha de estilo/modelo base (ex.: AnimateDiff "base"): prefere a opção realista.
   if ($("realista").checked) {
@@ -609,7 +618,7 @@ const HIST_KEY = "uxia_keep_history";
 let keepHistory = false;
 try { keepHistory = localStorage.getItem(HIST_KEY) === "1"; } catch {}
 let log = [];
-const subText = () => keepHistory ? "online · conversa salva neste aparelho" : "online · nada é salvo neste aparelho";
+const subText = () => `${VERSAO} · ` + (keepHistory ? "conversa salva neste aparelho" : "nada é salvo neste aparelho");
 
 function idb() {
   return new Promise((res, rej) => {
@@ -831,7 +840,23 @@ setModel(model, false);
 $("sub").textContent = subText();
 hello();
 if (keepHistory) loadLog().then((saved) => { log = saved; replay(saved); });
-if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
+if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").then((r) => r.update()).catch(() => {});
+
+// Verifica se há versão nova publicada e oferece atualizar com um toque (limpa service worker e caches).
+async function forceUpdate() {
+  try { for (const r of await navigator.serviceWorker.getRegistrations()) await r.unregister(); } catch {}
+  try { for (const k of await caches.keys()) await caches.delete(k); } catch {}
+  location.replace(location.pathname + "?v=" + Date.now());
+}
+(async () => {
+  if (location.protocol !== "https:") return;
+  try {
+    const j = await (await fetch(`version.json?t=${Date.now()}`, { cache: "no-store" })).json();
+    if (j?.v && j.v !== VERSAO) {
+      bubble("bot", { text: `Nova versão disponível (${j.v}). Você está na ${VERSAO}.`, actions: [["Atualizar agora", forceUpdate]] });
+    }
+  } catch {}
+})();
 </script>
 </body>
 </html>
