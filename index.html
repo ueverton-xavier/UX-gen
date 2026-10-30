@@ -133,7 +133,7 @@
 </dialog>
 
 <script type="module">
-const VERSAO = "v13";
+const VERSAO = "v14";
 import { Client, handle_file } from "https://cdn.jsdelivr.net/npm/@gradio/client@2.7.1/dist/browser.js";
 
 // Catálogo de modelos (Spaces públicos do Hugging Face). "aceita": o que o modelo recebe.
@@ -162,6 +162,24 @@ let attached = null;             // Blob anexado aguardando envio
 // Imagens que o próprio app gerou só a partir de texto (ou derivadas delas): sabidamente fictícias.
 // Arquivos enviados pelo clipe nunca entram aqui — marca d'água/assinatura não prova que não é pessoa real.
 const FICTIONAL = new WeakSet();
+// Identidade de arquivos salvos: ao tocar "Salvar" numa imagem fictícia, guarda só a impressão digital
+// (SHA-256 dos bytes, não a imagem). Se o mesmo arquivo voltar pelo clipe, é reconhecido.
+const HASH_KEY = "uxia_fictional_hashes";
+async function sha256(blob) {
+  const d = await crypto.subtle.digest("SHA-256", await blob.arrayBuffer());
+  return [...new Uint8Array(d)].map((x) => x.toString(16).padStart(2, "0")).join("");
+}
+function loadHashes() { try { return JSON.parse(localStorage.getItem(HASH_KEY) || "[]"); } catch { return []; } }
+async function rememberFictional(blob) {
+  try {
+    const h = await sha256(blob);
+    const list = loadHashes().filter((x) => x !== h); list.push(h);
+    localStorage.setItem(HASH_KEY, JSON.stringify(list.slice(-1000)));
+  } catch {}
+}
+async function isKnownFictional(blob) {
+  try { return loadHashes().includes(await sha256(blob)); } catch { return false; }
+}
 const clients = {};
 
 const now = () => new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
@@ -428,7 +446,10 @@ function showResult(r, time) {
   const m = MODELS.find((x) => x.id === r.modelId) || { id: r.modelId, nome: r.nome };
   const url = r.blob ? objUrl(r.blob) : r.remoteUrl;
   const ext = ((r.blob?.type || "").split("/")[1] || (r.video ? "mp4" : "webp")).replace("jpeg", "jpg").replace("quicktime", "mov");
-  const actions = [["Salvar", () => { const a = document.createElement("a"); a.href = url; a.download = `${m.id}-${r.seed ?? Date.now()}.${ext}`; a.click(); }]];
+  const actions = [["Salvar", () => {
+    if (r.fictional && r.blob) rememberFictional(r.blob);
+    const a = document.createElement("a"); a.href = url; a.download = `${m.id}-${r.seed ?? Date.now()}.${ext}`; a.click();
+  }]];
   if (!r.video && r.blob) {
     actions.push(["Editar", () => { setModel(MODELS.find((x) => x.id === "flux-kontext")); setAttach(r.blob); }]);
     actions.push(["Animar", () => { setModel(MODELS.find((x) => x.id === "ltx")); setAttach(r.blob); }]);
@@ -498,7 +519,12 @@ $("text").addEventListener("input", autosize);
 $("text").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !matchMedia("(pointer:coarse)").matches) { e.preventDefault(); send(); } });
 $("send").onclick = send;
 $("clip").onclick = () => $("file").click();
-$("file").onchange = () => { const f = $("file").files[0]; $("file").value = ""; if (f) setAttach(f); };
+$("file").onchange = async () => {
+  const f = $("file").files[0]; $("file").value = "";
+  if (!f) return;
+  if (await isKnownFictional(f)) { FICTIONAL.add(f); sys("Imagem reconhecida: gerada pelo UXIA (fictícia)."); }
+  setAttach(f);
+};
 $("unattach").onclick = () => setAttach(null);
 $("gear").onclick = () => $("settings").showModal();
 // Token salvo só se o usuário marcar "Lembrar" (única gravação do app no aparelho).
