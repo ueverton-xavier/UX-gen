@@ -138,7 +138,15 @@
   <input id="rpid" autocomplete="off" placeholder="ex.: abc123xyz">
   <label for="rpkey">RunPod — API Key</label>
   <input id="rpkey" type="password" autocomplete="off" placeholder="rpa_...">
-  <label for="rpflow">RunPod — fluxo ComfyUI (vazio = Wan 2.1 1.3B texto→vídeo). Use {{PROMPT}}, {{NEGATIVE}}, {{SEED}}, {{WIDTH}}, {{HEIGHT}}, {{IMAGE}}</label>
+  <label for="rpmodel">RunPod — modelo instalado</label>
+  <select id="rpmodel">
+    <option value="wan22">Wan 2.2 TI2V 5B — 720p, texto ou imagem → vídeo (GPU 24 GB)</option>
+    <option value="wan13">Wan 2.1 1.3B — 480p, só texto → vídeo (GPU 16 GB)</option>
+  </select>
+  <label style="display:flex;align-items:center;gap:8px;margin-top:10px;color:var(--txt)">
+    <input id="rpquick" type="checkbox" style="width:auto"> Vídeo curto de teste (~2 s, menos passos — bem mais rápido)
+  </label>
+  <label for="rpflow">RunPod — fluxo ComfyUI próprio (vazio = usa o modelo escolhido acima). Use {{PROMPT}}, {{NEGATIVE}}, {{SEED}}, {{WIDTH}}, {{HEIGHT}}, {{IMAGE}}</label>
   <textarea id="rpflow" rows="3" autocomplete="off" style="width:100%;background:var(--input);color:var(--txt);border:0;border-radius:8px;padding:10px;font:inherit" placeholder="cole aqui o JSON do fluxo (formato API do ComfyUI)"></textarea>
   <label style="display:flex;align-items:center;gap:8px;margin-top:10px;color:var(--txt)">
     <input id="autofb" type="checkbox" checked style="width:auto"> Trocar de provedor sozinho quando a cota acabar
@@ -155,7 +163,7 @@
 </dialog>
 
 <script type="module">
-const VERSAO = "v22";
+const VERSAO = "v23";
 import { Client, handle_file } from "https://cdn.jsdelivr.net/npm/@gradio/client@2.7.1/dist/browser.js";
 
 // Catálogo de modelos (Spaces públicos do Hugging Face). "aceita": o que o modelo recebe.
@@ -168,7 +176,7 @@ const MODELS = [
   { id: "ltx",          nome: "LTX-Video",        tipo: "vídeo",  aceita: "ambos",  space: "Lightricks/ltx-video-distilled",      desc: "Vídeo rápido a partir de texto ou imagem" },
   { id: "poll-flux",    nome: "FLUX (Pollinations)", tipo: "imagem", aceita: "texto", prov: "pollinations", space: "pollinations.ai", desc: "Outro provedor, cota própria (chave opcional)" },
   { id: "tog-schnell",  nome: "FLUX schnell (Together)", tipo: "imagem", aceita: "texto", prov: "together", space: "api.together.xyz", desc: "Outro provedor, endpoint grátis (precisa chave)" },
-  { id: "runpod",       nome: "Minha GPU (RunPod)", tipo: "vídeo", aceita: "ambos", prov: "runpod", space: "api.runpod.ai", desc: "Seu endpoint Serverless ComfyUI (Wan 2.1 1.3B pronto, ou seu fluxo)" },
+  { id: "runpod",       nome: "Minha GPU (RunPod)", tipo: "vídeo", aceita: "ambos", prov: "runpod", space: "api.runpod.ai", desc: "Seu endpoint Serverless ComfyUI (Wan 2.2 5B ou 2.1 1.3B, ou seu fluxo)" },
   { id: "civ-wan",      nome: "Wan vídeo (Civitai)", tipo: "vídeo", aceita: "ambos", prov: "civitai-video", space: "orchestration.civitai.com", desc: "Vídeo por texto ou imagem, fora da cota do Hugging Face (chave Civitai, usa Buzz)" },
   { id: "civitai",      nome: "Civitai (checkpoint)", tipo: "imagem", aceita: "texto", prov: "civitai", space: "orchestration.civitai.com", desc: "Modelos da comunidade Civitai pelo AIR (precisa chave, usa Buzz)" },
 ];
@@ -544,13 +552,34 @@ const WAN13_FLOW = {
   "3": { class_type: "VAELoader", inputs: { vae_name: "wan_2.1_vae.safetensors" } },
   "4": { class_type: "CLIPTextEncode", inputs: { text: "{{PROMPT}}", clip: ["2", 0] } },
   "5": { class_type: "CLIPTextEncode", inputs: { text: "{{NEGATIVE}}", clip: ["2", 0] } },
-  "6": { class_type: "EmptyHunyuanLatentVideo", inputs: { width: "{{WIDTH}}", height: "{{HEIGHT}}", length: 81, batch_size: 1 } },
+  "6": { class_type: "EmptyHunyuanLatentVideo", inputs: { width: "{{WIDTH}}", height: "{{HEIGHT}}", length: "{{LENGTH}}", batch_size: 1 } },
   "7": { class_type: "ModelSamplingSD3", inputs: { shift: 8, model: ["1", 0] } },
-  "8": { class_type: "KSampler", inputs: { seed: "{{SEED}}", steps: 30, cfg: 6, sampler_name: "uni_pc", scheduler: "simple", denoise: 1,
+  "8": { class_type: "KSampler", inputs: { seed: "{{SEED}}", steps: "{{STEPS}}", cfg: 6, sampler_name: "uni_pc", scheduler: "simple", denoise: 1,
     model: ["7", 0], positive: ["4", 0], negative: ["5", 0], latent_image: ["6", 0] } },
   "9": { class_type: "VAEDecode", inputs: { samples: ["8", 0], vae: ["3", 0] } },
   "10": { class_type: "SaveAnimatedWEBP", inputs: { filename_prefix: "uxia", fps: 16, lossless: false, quality: 90, method: "default", images: ["9", 0] } },
 };
+// Wan 2.2 TI2V 5B (ComfyUI nativo, arquivos do Comfy-Org/Wan_2.2_ComfyUI_Repackaged). Com imagem: start_image → anima a foto.
+function wan22Flow(withImage) {
+  const f = {
+    "1": { class_type: "UNETLoader", inputs: { unet_name: "wan2.2_ti2v_5B_fp16.safetensors", weight_dtype: "default" } },
+    "2": { class_type: "CLIPLoader", inputs: { clip_name: "umt5_xxl_fp8_e4m3fn_scaled.safetensors", type: "wan" } },
+    "3": { class_type: "VAELoader", inputs: { vae_name: "wan2.2_vae.safetensors" } },
+    "4": { class_type: "CLIPTextEncode", inputs: { text: "{{PROMPT}}", clip: ["2", 0] } },
+    "5": { class_type: "CLIPTextEncode", inputs: { text: "{{NEGATIVE}}", clip: ["2", 0] } },
+    "6": { class_type: "Wan22ImageToVideoLatent", inputs: { vae: ["3", 0], width: "{{WIDTH}}", height: "{{HEIGHT}}", length: "{{LENGTH}}", batch_size: 1 } },
+    "7": { class_type: "ModelSamplingSD3", inputs: { shift: 8, model: ["1", 0] } },
+    "8": { class_type: "KSampler", inputs: { seed: "{{SEED}}", steps: "{{STEPS}}", cfg: 5, sampler_name: "uni_pc", scheduler: "simple", denoise: 1,
+      model: ["7", 0], positive: ["4", 0], negative: ["5", 0], latent_image: ["6", 0] } },
+    "9": { class_type: "VAEDecode", inputs: { samples: ["8", 0], vae: ["3", 0] } },
+    "10": { class_type: "SaveAnimatedWEBP", inputs: { filename_prefix: "uxia", fps: 24, lossless: false, quality: 90, method: "default", images: ["9", 0] } },
+  };
+  if (withImage) {
+    f["11"] = { class_type: "LoadImage", inputs: { image: "{{IMAGE}}" } };
+    f["6"].inputs.start_image = ["11", 0];
+  }
+  return f;
+}
 const NEG_VIDEO = "blurry, low quality, distorted, deformed, bad anatomy, extra limbs, watermark, text, static, jpeg artifacts";
 
 // Troca os marcadores {{...}} no fluxo (número vira número, texto vira texto).
@@ -572,14 +601,20 @@ const MIME_BY_EXT = { webp: "image/webp", png: "image/png", jpg: "image/jpeg", j
 async function genRunpod(prompt, inputBlob) {
   const id = $("rpid").value.trim(), key = $("rpkey").value.trim();
   if (!id || !key) throw new Error("coloque o Endpoint ID e a API Key da RunPod em Ajustes (⋮)");
-  let flow = WAN13_FLOW;
+  const which = $("rpmodel").value;
+  let flow = which === "wan13" ? WAN13_FLOW : wan22Flow(!!inputBlob);
   const custom = $("rpflow").value.trim();
   if (custom) { try { flow = JSON.parse(custom); } catch { throw new Error("o fluxo colado não é um JSON válido (use Export → API do ComfyUI)"); } }
-  if (inputBlob && !/\{\{IMAGE\}\}/.test(JSON.stringify(flow))) throw new Error("o fluxo atual não usa imagem: o Wan 2.1 1.3B só faz texto→vídeo. Cole um fluxo imagem→vídeo com {{IMAGE}} ou envie sem anexo");
+  if (inputBlob && !/\{\{IMAGE\}\}/.test(JSON.stringify(flow))) throw new Error("o fluxo atual não usa imagem: o Wan 2.1 1.3B só faz texto→vídeo. Escolha Wan 2.2 TI2V 5B em Ajustes (⋮) ou envie sem anexo");
   const seedTxt = $("seed").value.trim();
   const portrait = $("size").value === "768x1344";
+  const quick = $("rpquick").checked;
+  const hd = which !== "wan13" || custom;
+  // Wan 2.2 5B: 1280×704 a 24 fps (121 quadros ≈ 5 s). Wan 2.1 1.3B: 832×480 a 16 fps (81 ≈ 5 s). Quadros sempre 4n+1.
+  const [W, H] = hd ? [1280, 704] : [832, 480];
   const vals = { PROMPT: prompt, NEGATIVE: NEG_VIDEO, SEED: seedTxt ? Number(seedTxt) : Math.floor(Math.random() * 2 ** 31),
-    WIDTH: portrait ? 480 : 832, HEIGHT: portrait ? 832 : 480, IMAGE: "uxia_input.jpg" };
+    WIDTH: portrait ? H : W, HEIGHT: portrait ? W : H, IMAGE: "uxia_input.jpg",
+    LENGTH: hd ? (quick ? 49 : 121) : (quick ? 33 : 81), STEPS: Number($("steps").value.trim()) || (quick ? 20 : 30) };
   const input = { workflow: fillFlow(flow, vals) };
   if (inputBlob) input.images = [{ name: "uxia_input.jpg", image: await toDataUrl(inputBlob) }];
   const headers = { Authorization: `Bearer ${key}`, "Content-Type": "application/json" };
@@ -849,7 +884,7 @@ $("unattach").onclick = () => setAttach(null);
 $("gear").onclick = () => $("settings").showModal();
 // Token salvo só se o usuário marcar "Lembrar" (única gravação do app no aparelho).
 const TOKEN_KEY = "uxia_hf_token";
-const KEY_FIELDS = { token: TOKEN_KEY, pollkey: "uxia_poll_key", togkey: "uxia_together_key", civkey: "uxia_civitai_key", civair: "uxia_civitai_air", civloras: "uxia_civitai_loras", rpid: "uxia_runpod_id", rpkey: "uxia_runpod_key", rpflow: "uxia_runpod_flow" };
+const KEY_FIELDS = { token: TOKEN_KEY, pollkey: "uxia_poll_key", togkey: "uxia_together_key", civkey: "uxia_civitai_key", civair: "uxia_civitai_air", civloras: "uxia_civitai_loras", rpid: "uxia_runpod_id", rpkey: "uxia_runpod_key", rpflow: "uxia_runpod_flow", rpmodel: "uxia_runpod_model" };
 function saveTokenPref() {
   for (const [id, key] of Object.entries(KEY_FIELDS)) {
     const v = $(id).value.trim();
