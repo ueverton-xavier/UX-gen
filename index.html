@@ -171,7 +171,7 @@
 </dialog>
 
 <script type="module">
-const VERSAO = "v24";
+const VERSAO = "v25";
 import { Client, handle_file } from "https://cdn.jsdelivr.net/npm/@gradio/client@2.7.1/dist/browser.js";
 
 // Catálogo de modelos (Spaces públicos do Hugging Face). "aceita": o que o modelo recebe.
@@ -511,10 +511,10 @@ async function veniceModels() {
   if (!r.ok) throw new Error(`HTTP ${r.status} ${JSON.stringify(j).slice(0, 200)}`);
   return (j.data || []).map((m) => ({ id: m.id, nome: m.model_spec?.name || m.id, padrao: (m.model_spec?.traits || []).includes("default") }));
 }
-async function genVenice(prompt) {
+async function genVenice(prompt, m) {
   const key = $("venkey").value.trim();
   if (!key) throw new Error("coloque a chave da Venice AI em Ajustes (⋮)");
-  const model = $("venmodel").value.trim() || "venice-sd35";
+  const model = m?.venModel || $("venmodel").value.trim() || "venice-sd35";
   const [w, h] = $("size").value.split("x").map(Number);
   const seedTxt = $("seed").value.trim();
   const stepsTxt = $("steps").value.trim();
@@ -737,7 +737,7 @@ async function genCivitaiVideo(prompt, inputBlob) {
 }
 
 async function generate(m, prompt, inputBlob) {
-  if (m.prov === "venice") return step("Venice", () => genVenice(prompt));
+  if (m.prov === "venice") return step("Venice", () => genVenice(prompt, m));
   if (m.prov === "runpod") return step("RunPod", () => genRunpod(prompt, inputBlob));
   if (m.prov === "civitai-video") return step("Civitai vídeo", () => genCivitaiVideo(prompt, inputBlob));
   if (m.prov === "civitai") return step("Civitai", () => genCivitai(prompt));
@@ -951,10 +951,22 @@ for (const [id, key] of Object.entries(KEY_FIELDS)) {
   try { const v = localStorage.getItem(key); if (v) { $(id).value = v; $("remember").checked = true; } } catch {}
 }
 $("keephist").checked = keepHistory;
+// Cada modelo de imagem da conta Venice vira uma opção no seletor do topo ("Venice · Nome").
+function addVeniceToPicker(list) {
+  for (let i = MODELS.length - 1; i >= 0; i--) if (MODELS[i].venModel) MODELS.splice(i, 1);
+  const at = MODELS.findIndex((x) => x.id === "venice") + 1;
+  MODELS.splice(at, 0, ...list.map((v) => ({ id: `venice:${v.id}`, nome: `Venice · ${v.nome}`, tipo: "imagem", aceita: "texto",
+    prov: "venice", venModel: v.id, space: "api.venice.ai", desc: `Modelo ${v.id} da sua conta Venice${v.padrao ? " (padrão)" : ""}` })));
+}
+async function loadVeniceSilently() {
+  if (!$("venkey").value.trim()) return;
+  try { addVeniceToPicker(await veniceModels()); } catch {}
+}
 $("venload").onclick = async () => {
   const b = $("venload"); b.textContent = "Carregando…";
   try {
     const list = await veniceModels();
+    addVeniceToPicker(list);
     $("venmodels").replaceChildren(...list.map((m) => Object.assign(document.createElement("option"), { value: m.id, label: m.nome })));
     if (!$("venmodel").value.trim()) $("venmodel").value = (list.find((m) => m.padrao) || list[0] || {}).id || "";
     b.textContent = `${list.length} modelos`;
@@ -1027,6 +1039,7 @@ setModel(model, false);
 $("sub").textContent = subText();
 hello();
 if (keepHistory) loadLog().then((saved) => { log = saved; replay(saved); });
+loadVeniceSilently();
 if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").then((r) => r.update()).catch(() => {});
 
 // Verifica se há versão nova publicada e oferece atualizar com um toque (limpa service worker e caches).
