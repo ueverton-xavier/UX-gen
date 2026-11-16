@@ -125,6 +125,14 @@
   <input id="pollkey" type="password" autocomplete="off" placeholder="pk_... ou sk_...">
   <label for="togkey">Chave Together AI (api.together.ai)</label>
   <input id="togkey" type="password" autocomplete="off" placeholder="chave da Together">
+  <label for="venkey">Chave Venice AI (venice.ai → Settings → API)</label>
+  <input id="venkey" type="password" autocomplete="off" placeholder="chave da Venice">
+  <label for="venmodel">Modelo Venice (toque em “Carregar modelos” para ver os da sua conta)</label>
+  <div style="display:flex;gap:8px">
+    <input id="venmodel" list="venmodels" autocomplete="off" placeholder="venice-sd35" style="flex:1">
+    <button type="button" id="venload" style="background:var(--input);color:var(--acc);border:1px solid var(--acc);border-radius:8px;padding:0 10px">Carregar modelos</button>
+  </div>
+  <datalist id="venmodels"></datalist>
   <label for="civkey">Chave Civitai (civitai.com → Account → API Keys)</label>
   <input id="civkey" type="password" autocomplete="off" placeholder="chave do Civitai">
   <label for="civair">Modelo Civitai (opcional: AIR, na página do modelo)</label>
@@ -163,7 +171,7 @@
 </dialog>
 
 <script type="module">
-const VERSAO = "v23";
+const VERSAO = "v24";
 import { Client, handle_file } from "https://cdn.jsdelivr.net/npm/@gradio/client@2.7.1/dist/browser.js";
 
 // Catálogo de modelos (Spaces públicos do Hugging Face). "aceita": o que o modelo recebe.
@@ -178,10 +186,11 @@ const MODELS = [
   { id: "tog-schnell",  nome: "FLUX schnell (Together)", tipo: "imagem", aceita: "texto", prov: "together", space: "api.together.xyz", desc: "Outro provedor, endpoint grátis (precisa chave)" },
   { id: "runpod",       nome: "Minha GPU (RunPod)", tipo: "vídeo", aceita: "ambos", prov: "runpod", space: "api.runpod.ai", desc: "Seu endpoint Serverless ComfyUI (Wan 2.2 5B ou 2.1 1.3B, ou seu fluxo)" },
   { id: "civ-wan",      nome: "Wan vídeo (Civitai)", tipo: "vídeo", aceita: "ambos", prov: "civitai-video", space: "orchestration.civitai.com", desc: "Vídeo por texto ou imagem, fora da cota do Hugging Face (chave Civitai, usa Buzz)" },
+  { id: "venice",       nome: "Venice AI (imagem)", tipo: "imagem", aceita: "texto", prov: "venice", space: "api.venice.ai", desc: "Imagem pela Venice AI com sua chave (modelo escolhido em Ajustes)" },
   { id: "civitai",      nome: "Civitai (checkpoint)", tipo: "imagem", aceita: "texto", prov: "civitai", space: "orchestration.civitai.com", desc: "Modelos da comunidade Civitai pelo AIR (precisa chave, usa Buzz)" },
 ];
 // Ordem de troca automática quando a cota do Hugging Face acaba (só texto → imagem).
-const FALLBACK = ["poll-flux", "tog-schnell", "civitai"];
+const FALLBACK = ["venice", "poll-flux", "tog-schnell", "civitai"];
 let model = MODELS[0];
 
 // Travas exigidas pelas licenças e pela lei:
@@ -492,6 +501,51 @@ function parseLoras(text) {
   return Object.keys(out).length ? out : null;
 }
 
+// ---------- Venice AI: POST /api/v1/image/generate (síncrono, imagem em base64) ----------
+const VENICE = "https://api.venice.ai/api/v1";
+async function veniceModels() {
+  const key = $("venkey").value.trim();
+  if (!key) throw new Error("coloque a chave da Venice primeiro");
+  const r = await fetch(`${VENICE}/models?type=image`, { headers: { Authorization: `Bearer ${key}` }, cache: "no-store" });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(`HTTP ${r.status} ${JSON.stringify(j).slice(0, 200)}`);
+  return (j.data || []).map((m) => ({ id: m.id, nome: m.model_spec?.name || m.id, padrao: (m.model_spec?.traits || []).includes("default") }));
+}
+async function genVenice(prompt) {
+  const key = $("venkey").value.trim();
+  if (!key) throw new Error("coloque a chave da Venice AI em Ajustes (⋮)");
+  const model = $("venmodel").value.trim() || "venice-sd35";
+  const [w, h] = $("size").value.split("x").map(Number);
+  const seedTxt = $("seed").value.trim();
+  const stepsTxt = $("steps").value.trim();
+  const headers = { Authorization: `Bearer ${key}`, "Content-Type": "application/json" };
+  const ratio = w === h ? "1:1" : h > w ? "9:16" : "16:9";
+  const base = { model, prompt, safe_mode: false, format: "webp", return_binary: false };
+  if (seedTxt) base.seed = Number(seedTxt);
+  // O tamanho varia por modelo: tenta pixels, depois proporção, depois só o mínimo.
+  const CANDIDATOS = [
+    { ...base, width: w, height: h, hide_watermark: true, ...(stepsTxt ? { steps: Number(stepsTxt) } : {}) },
+    { ...base, width: w, height: h },
+    { ...base, aspect_ratio: ratio },
+    { model, prompt, safe_mode: false },
+  ];
+  let last;
+  for (const body of CANDIDATOS) {
+    const r = await fetch(`${VENICE}/image/generate`, { method: "POST", headers, body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok) {
+      const b64 = j?.images?.[0] || j?.data?.[0]?.b64_json;
+      if (!b64) throw new Error("a Venice respondeu sem imagem");
+      const bytes = Uint8Array.from(atob(String(b64).replace(/^data:[^,]+,/, "")), (c) => c.charCodeAt(0));
+      const type = bytes[0] === 0x89 ? "image/png" : bytes[0] === 0xff ? "image/jpeg" : "image/webp";
+      return { blob: new Blob([bytes], { type }), seed: base.seed };
+    }
+    last = new Error(`HTTP ${r.status} ${JSON.stringify(j?.details || j?.error || j).slice(0, 400)}`);
+    if (r.status !== 400) throw last;   // 401/402/429 etc.: não adianta trocar o formato
+  }
+  throw last;
+}
+
 async function genCivitai(prompt) {
   const key = $("civkey").value.trim();
   if (!key) throw new Error("coloque a chave do Civitai em Ajustes (⋮)");
@@ -683,6 +737,7 @@ async function genCivitaiVideo(prompt, inputBlob) {
 }
 
 async function generate(m, prompt, inputBlob) {
+  if (m.prov === "venice") return step("Venice", () => genVenice(prompt));
   if (m.prov === "runpod") return step("RunPod", () => genRunpod(prompt, inputBlob));
   if (m.prov === "civitai-video") return step("Civitai vídeo", () => genCivitaiVideo(prompt, inputBlob));
   if (m.prov === "civitai") return step("Civitai", () => genCivitai(prompt));
@@ -832,6 +887,7 @@ async function send() {
         const alt = MODELS.find((x) => x.id === id);
         if (alt.prov === "together" && !$("togkey").value.trim()) continue;
         if (alt.prov === "civitai" && !$("civkey").value.trim()) continue;
+        if (alt.prov === "venice" && !$("venkey").value.trim()) continue;
         if (alt.prov === "civitai-video" || alt.prov === "runpod") continue;
         sys(`${prev} indisponível (cota/conexão) → tentando ${alt.nome}…`);
         prev = alt.nome;
@@ -861,7 +917,7 @@ async function send() {
         ? `O Space de ${m.nome} (${m.space}) está fora do ar, pausado ou mudou de endereço. Escolha outro modelo ou informe outro Space no seletor.`
         : /failed to fetch|networkerror|load failed/i.test(msg)
           ? `Sem resposta do servidor de ${m.nome} ao ${e.etapa || "conectar"}. O Space pode estar pausado, lotado ou fora do ar. Para descobrir o motivo: ⋮ → 🔍 Testar conexão.\n(${VERSAO} · detalhe: ${msg})`
-          : `Não consegui gerar com ${m.nome}${!r.m.prov && /^(Pollinations|Together|Civitai):/.test(msg) ? " nem com os outros provedores" : ""}: ${msg}`);
+          : `Não consegui gerar com ${m.nome}${!r.m.prov && /^(Venice|Pollinations|Together|Civitai):/.test(msg) ? " nem com os outros provedores" : ""}: ${msg}`);
   } finally {
     $("send").disabled = false;
     $("sub").textContent = subText();
@@ -884,7 +940,7 @@ $("unattach").onclick = () => setAttach(null);
 $("gear").onclick = () => $("settings").showModal();
 // Token salvo só se o usuário marcar "Lembrar" (única gravação do app no aparelho).
 const TOKEN_KEY = "uxia_hf_token";
-const KEY_FIELDS = { token: TOKEN_KEY, pollkey: "uxia_poll_key", togkey: "uxia_together_key", civkey: "uxia_civitai_key", civair: "uxia_civitai_air", civloras: "uxia_civitai_loras", rpid: "uxia_runpod_id", rpkey: "uxia_runpod_key", rpflow: "uxia_runpod_flow", rpmodel: "uxia_runpod_model" };
+const KEY_FIELDS = { token: TOKEN_KEY, pollkey: "uxia_poll_key", togkey: "uxia_together_key", civkey: "uxia_civitai_key", civair: "uxia_civitai_air", civloras: "uxia_civitai_loras", venkey: "uxia_venice_key", venmodel: "uxia_venice_model", rpid: "uxia_runpod_id", rpkey: "uxia_runpod_key", rpflow: "uxia_runpod_flow", rpmodel: "uxia_runpod_model" };
 function saveTokenPref() {
   for (const [id, key] of Object.entries(KEY_FIELDS)) {
     const v = $(id).value.trim();
@@ -895,6 +951,15 @@ for (const [id, key] of Object.entries(KEY_FIELDS)) {
   try { const v = localStorage.getItem(key); if (v) { $(id).value = v; $("remember").checked = true; } } catch {}
 }
 $("keephist").checked = keepHistory;
+$("venload").onclick = async () => {
+  const b = $("venload"); b.textContent = "Carregando…";
+  try {
+    const list = await veniceModels();
+    $("venmodels").replaceChildren(...list.map((m) => Object.assign(document.createElement("option"), { value: m.id, label: m.nome })));
+    if (!$("venmodel").value.trim()) $("venmodel").value = (list.find((m) => m.padrao) || list[0] || {}).id || "";
+    b.textContent = `${list.length} modelos`;
+  } catch (e) { b.textContent = "Erro"; alert(`Venice: ${e.message}`); }
+};
 $("okset").onclick = () => {
   saveTokenPref();
   const want = $("keephist").checked;
