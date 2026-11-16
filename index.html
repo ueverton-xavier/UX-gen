@@ -133,6 +133,7 @@
     <button type="button" id="venload" style="background:var(--input);color:var(--acc);border:1px solid var(--acc);border-radius:8px;padding:0 10px">Carregar modelos</button>
   </div>
   <small id="venstatus" style="color:var(--mut);display:block;margin-top:4px"></small>
+  <button type="button" id="ventest" style="width:100%;margin-top:6px;background:var(--input);color:var(--acc);border:1px solid var(--acc);border-radius:8px;padding:8px">🧪 Testar quais modelos geram imagem (gasta créditos)</button>
   <label for="civkey">Chave Civitai (civitai.com → Account → API Keys)</label>
   <input id="civkey" type="password" autocomplete="off" placeholder="chave do Civitai">
   <label for="civair">Modelo Civitai (opcional: AIR, na página do modelo)</label>
@@ -171,7 +172,7 @@
 </dialog>
 
 <script type="module">
-const VERSAO = "v27";
+const VERSAO = "v28";
 import { Client, handle_file } from "https://cdn.jsdelivr.net/npm/@gradio/client@2.7.1/dist/browser.js";
 
 // Catálogo de modelos (Spaces públicos do Hugging Face). "aceita": o que o modelo recebe.
@@ -530,11 +531,11 @@ async function veniceModels() {
   if (!r.ok) throw new Error(`HTTP ${r.status} ${JSON.stringify(j).slice(0, 200)}`);
   return (j.data || []).map((m) => ({ id: m.id, nome: m.model_spec?.name || m.id, padrao: (m.model_spec?.traits || []).includes("default") }));
 }
-async function genVenice(prompt, m) {
+async function genVenice(prompt, m, opts = {}) {
   const key = $("venkey").value.trim();
   if (!key) throw new Error("coloque a chave da Venice AI em Ajustes (⋮)");
   const model = m?.venModel || $("venmodel").value.trim() || venDefault;
-  const [w, h] = $("size").value.split("x").map(Number);
+  const [w, h] = opts.size || $("size").value.split("x").map(Number);
   const seedTxt = $("seed").value.trim();
   const stepsTxt = $("steps").value.trim();
   const headers = { Authorization: `Bearer ${key}`, "Content-Type": "application/json" };
@@ -990,6 +991,35 @@ async function loadVeniceSilently() {
   venSilent = true;
   try { await $("venload").onclick(); } catch {} finally { venSilent = false; }
 }
+// Testa cada modelo da lista com uma imagem pequena e mostra o resultado no chat (com miniatura).
+$("ventest").onclick = async () => {
+  const ids = [...$("venmodel").options].map((o) => o.value).filter((v) => v && v !== "__outro");
+  if (!$("venkey").value.trim()) return alert("Cole a chave da Venice primeiro.");
+  if (!confirm(`Vou gerar 1 imagem pequena (512×512) com cada um dos ${ids.length} modelos. Isso gasta créditos da Venice. Continuar?`)) return;
+  $("settings").close();
+  sys(`Testando ${ids.length} modelos Venice…`);
+  const ok = [], falhou = [];
+  for (const id of ids) {
+    $("sub").textContent = `testando ${id}… (${ok.length + falhou.length + 1}/${ids.length})`;
+    const t0 = performance.now();
+    try {
+      const r = await genVenice("a red apple on a wooden table, soft daylight, photo", { venModel: id }, { size: [512, 512] });
+      ok.push(id);
+      bubble("bot", { img: objUrl(r.blob), text: `✓ ${id} · ${((performance.now() - t0) / 1000).toFixed(0)}s` });
+    } catch (e) {
+      falhou.push(id);
+      bubble("bot err", { text: `✗ ${id}: ${String(e.message).slice(0, 160)}` });
+    }
+  }
+  // Marca o resultado na lista de modelos.
+  for (const o of $("venmodel").options) {
+    const base = o.textContent.replace(/^[✓✗] /, "");
+    if (ok.includes(o.value)) o.textContent = `✓ ${base}`;
+    else if (falhou.includes(o.value)) o.textContent = `✗ ${base}`;
+  }
+  $("sub").textContent = subText();
+  bubble("bot", { text: `Resultado: ${ok.length} funcionam, ${falhou.length} falharam.\n✓ ${ok.join(", ") || "nenhum"}${falhou.length ? `\n✗ ${falhou.join(", ")}` : ""}` });
+};
 fillVenSelect(VEN_FALLBACK, "Lista padrão — cole a chave para carregar os modelos da sua conta.");
 $("venmodel").addEventListener("change", () => {
   if ($("venmodel").value !== "__outro") return;
