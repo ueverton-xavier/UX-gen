@@ -129,9 +129,10 @@
   <input id="venkey" type="password" autocomplete="off" placeholder="chave da Venice">
   <label for="venmodel">Modelo Venice (a lista carrega sozinha ao colar a chave)</label>
   <div style="display:flex;gap:8px">
-    <select id="venmodel" style="flex:1"><option value="">Padrão da Venice</option></select>
+    <select id="venmodel" style="flex:1"></select>
     <button type="button" id="venload" style="background:var(--input);color:var(--acc);border:1px solid var(--acc);border-radius:8px;padding:0 10px">Carregar modelos</button>
   </div>
+  <small id="venstatus" style="color:var(--mut);display:block;margin-top:4px"></small>
   <label for="civkey">Chave Civitai (civitai.com → Account → API Keys)</label>
   <input id="civkey" type="password" autocomplete="off" placeholder="chave do Civitai">
   <label for="civair">Modelo Civitai (opcional: AIR, na página do modelo)</label>
@@ -170,7 +171,7 @@
 </dialog>
 
 <script type="module">
-const VERSAO = "v26";
+const VERSAO = "v27";
 import { Client, handle_file } from "https://cdn.jsdelivr.net/npm/@gradio/client@2.7.1/dist/browser.js";
 
 // Catálogo de modelos (Spaces públicos do Hugging Face). "aceita": o que o modelo recebe.
@@ -502,7 +503,25 @@ function parseLoras(text) {
 
 // ---------- Venice AI: POST /api/v1/image/generate (síncrono, imagem em base64) ----------
 const VENICE = "https://api.venice.ai/api/v1";
-let venDefault = "venice-sd35";   // trocado pelo modelo marcado "default" na conta, quando a lista carrega
+let venDefault = "venice-sd35";
+// Lista de reserva (mostrada até a lista real da conta carregar; nomes podem mudar na Venice).
+const VEN_FALLBACK = [
+  { id: "venice-sd35", nome: "Venice SD3.5", padrao: true }, { id: "hidream", nome: "HiDream" },
+  { id: "flux-dev", nome: "FLUX Standard" }, { id: "flux-dev-uncensored", nome: "FLUX Custom" },
+  { id: "lustify-sdxl", nome: "Lustify SDXL" }, { id: "pony-realism", nome: "Pony Realism" },
+  { id: "qwen-image", nome: "Qwen Image" },
+];
+function fillVenSelect(list, fonte) {
+  const sel = $("venmodel"), atual = sel.value;
+  sel.replaceChildren(
+    Object.assign(document.createElement("option"), { value: "", textContent: "Padrão da conta" }),
+    ...list.map((m) => Object.assign(document.createElement("option"), { value: m.id, textContent: `${m.nome}${m.padrao ? " (padrão)" : ""}` })),
+    Object.assign(document.createElement("option"), { value: "__outro", textContent: "Outro… (digitar o id)" }));
+  if (atual && atual !== "__outro" && ![...sel.options].some((o) => o.value === atual))
+    sel.add(Object.assign(document.createElement("option"), { value: atual, textContent: atual }), sel.options.length - 1);
+  sel.value = atual === "__outro" ? "" : atual;
+  $("venstatus").textContent = fonte;
+}   // trocado pelo modelo marcado "default" na conta, quando a lista carrega
 async function veniceModels() {
   const key = $("venkey").value.trim();
   if (!key) throw new Error("coloque a chave da Venice primeiro");
@@ -971,6 +990,14 @@ async function loadVeniceSilently() {
   venSilent = true;
   try { await $("venload").onclick(); } catch {} finally { venSilent = false; }
 }
+fillVenSelect(VEN_FALLBACK, "Lista padrão — cole a chave para carregar os modelos da sua conta.");
+$("venmodel").addEventListener("change", () => {
+  if ($("venmodel").value !== "__outro") return;
+  const id = (prompt("Id do modelo Venice (ex.: hidream):") || "").trim();
+  const sel = $("venmodel");
+  if (id) { if (![...sel.options].some((o) => o.value === id)) sel.add(Object.assign(document.createElement("option"), { value: id, textContent: id }), sel.options.length - 1); sel.value = id; }
+  else sel.value = "";
+});
 $("venkey").addEventListener("change", () => { if ($("venkey").value.trim()) $("venload").click(); });
 $("venload").onclick = async () => {
   const b = $("venload"); b.textContent = "Carregando…";
@@ -978,13 +1005,12 @@ $("venload").onclick = async () => {
     const list = await veniceModels();
     venDefault = (list.find((m) => m.padrao) || list[0] || {}).id || venDefault;
     addVeniceToPicker(list);
-    const atual = $("venmodel").value;
-    $("venmodel").replaceChildren(
-      Object.assign(document.createElement("option"), { value: "", textContent: "Padrão da Venice" }),
-      ...list.map((m) => Object.assign(document.createElement("option"), { value: m.id, textContent: `${m.nome}${m.padrao ? " (padrão)" : ""}` })));
-    $("venmodel").value = list.some((m) => m.id === atual) ? atual : ((list.find((m) => m.padrao) || {}).id || "");
+    fillVenSelect(list, `✓ ${list.length} modelos carregados da sua conta Venice.`);
     b.textContent = `${list.length} modelos`;
-  } catch (e) { b.textContent = "Erro"; if (!venSilent) alert(`Venice: ${e.message}`); }
+  } catch (e) {
+    b.textContent = "Tentar de novo";
+    $("venstatus").textContent = `Não consegui buscar os modelos (${String(e.message).slice(0, 120)}). Usando a lista padrão — escolha um ou “Outro…”.`;
+  }
 };
 $("okset").onclick = () => {
   saveTokenPref();
